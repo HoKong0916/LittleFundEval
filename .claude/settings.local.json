@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__EnhancedBing__bing_search",
+      "mcp__fetch__fetch",
+      "mcp__EnhancedBing__fetch_webpage"
+    ]
+  }
+}

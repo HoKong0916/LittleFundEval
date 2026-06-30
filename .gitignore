@@ -1,0 +1,14 @@
+__pycache__/config.cpython-311.pyc
+__pycache__/llama_launcher.cpython-311.pyc
+__pycache__/llm_client.cpython-311.pyc
+environment.yml
+requirement.txt
+docs/superpowers/plans/2026-05-29-fund-evaluation-agent-plan.md
+docs/superpowers/plans/2026-06-09-fund-evaluation-agent-plan.md
+docs/superpowers/specs/2026-05-29-fund-evaluation-agent-design.md
+docs/superpowers/specs/2026-06-09-fund-evaluation-agent-design.md
+core/__pycache__/react_loop.cpython-311.pyc
+core/__pycache__/router.cpython-311.pyc
+prompts/__pycache__/direct_answer.cpython-311.pyc
+prompts/__pycache__/react.cpython-311.pyc
+prompts/__pycache__/router.cpython-311.pyc
