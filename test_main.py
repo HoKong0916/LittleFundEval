@@ -19,15 +19,15 @@ async def llm_direct_answer(user_message: list) -> None:
 
 
 async def main():
-    user_message = "基金代码002112和大摩数字经济混合C，都是重仓光模块板块吗？"
+    user_message = "东方人工智能主题混合C，是连涨了吗？连续涨了几天？"
     user_input = [{"role":"user","content":user_message}]
     decision = classify_intent(user_input)
 
     print("\n",f'执行{decision["category"]}路径',"\n")
 
-    if decision["category"] == "direct_answer":
-        await llm_direct_answer(user_input)   
-    elif decision["category"] == "react":
+    if decision["category"] == "DirectAnswer":
+        await llm_direct_answer(user_input)
+    elif decision["category"] == "ReAct":
         await run_react_loop(user_input, decision["tools_needed"])
     # else:
     #     reply = run_rewoo(user_input, decision["tools_needed"])

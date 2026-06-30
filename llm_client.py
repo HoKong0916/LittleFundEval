@@ -85,6 +85,9 @@ async def cloud_chat(
 
     except asyncio.CancelledError:
         yield {"type": "done", "finish_reason": "cancelled"}
+    except GeneratorExit:
+        # async generator 被外部 aclose() 正常终止 —— 直接返回，不再 yield
+        return
     except Exception:
         yield {"type": "done", "finish_reason": "error"}
         raise

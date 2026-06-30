@@ -56,7 +56,10 @@ def start_server() -> bool:
 
     print(f"[llama-launcher] 启动 llama-server (端口 {LLAMA_SERVER_PORT})...")
 
-    _server_process = subprocess.Popen(cmd)
+    _server_process = subprocess.Popen(
+        cmd,
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
     # 写入 PID 文件，方便其他进程定位
     with open(_PID_FILE, "w") as f:
