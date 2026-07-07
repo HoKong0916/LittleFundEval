@@ -1,78 +1,133 @@
-"""工具注册中心
+"""工具注册中心 —— 所有工具的 JSON Schema 定义与函数映射的统一入口。"""
 
-管理 3 个工具的注册与查询。所有工具均为 async，并发执行。
-"""
-import asyncio
+import json
 
-from tools.fund_nav import get_fund_nav
-from tools.fund_holdings import get_fund_holdings
-from tools.benchmark import get_benchmark
+from tools.search_fund import search_fund
+from tools.fund_performance import get_fund_performance
+from tools.fund_holding import get_fund_holdings
+from tools.capital_inflow import capital_inflow_in_sectors
+from tools.select_fund import select_fund
 
+# ═══════════════════════════════════════════════════════════════════
+# JSON Schema 定义（OpenAI/DeepSeek function calling 格式）
+# ═══════════════════════════════════════════════════════════════════
 
-# 各工具返回结果的冗余字段，发给 LLM 前移除
-_TRIM_KEYS = {
-    "get_fund_nav": {"source"},
-    "get_fund_holdings": {"source", "fund_code", "当前季度持仓明细", "上一季度持仓明细"},
-    "get_benchmark": {"source"},
+TOOLS_SCHEMA: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_fund",
+            "description": "根据关键词搜索基金，返回匹配的基金代码和名称",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "搜索关键词，如基金名称、代码",
+                    }
+                },
+                "required": ["keyword"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fund_performance",
+            "description": "获取基金基本面：收益状况（近1/3/6/12月收益率及同类排名）、风险状况（最大回撤、年化波动率、夏普比率、较同类风险收益比、较同类抗风险波动）、当天状况（最新净值、估算净值、估算涨幅）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fund_code": {
+                        "type": "string",
+                        "description": "6位数字基金代码",
+                    }
+                },
+                "required": ["fund_code"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fund_holdings",
+            "description": "获取基金最新季报的前十大重仓股、主攻板块方向、前十持仓占比合计",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fund_code": {
+                        "type": "string",
+                        "description": "6位数字基金代码",
+                    }
+                },
+                "required": ["fund_code"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capital_inflow_in_sectors",
+            "description": "获取各板块资金流向（今日/近1周/近1月/近3月）。不传sectors则展示各时间段TOP5流入流出板块；传入sectors则按指定板块展示四个时间段的资金流向",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sectors": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选，指定板块名称列表，如['人工智能', '新能源']。不传则展示各时间段TOP5",
+                    }
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "select_fund",
+            "description": "根据自然语言查询，从天天基金导购页筛选指定板块和时间段下收益前十的基金列表",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_query": {
+                        "type": "string",
+                        "description": "自然语言查询，描述板块和时间段，如'AI应用板块近1月前十收益'",
+                    }
+                },
+                "required": ["user_query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+
+# ═══════════════════════════════════════════════════════════════════
+# 工具名 → async 函数映射
+# ═══════════════════════════════════════════════════════════════════
+
+TOOLS_MAP: dict = {
+    "search_fund": search_fund,
+    "get_fund_performance": get_fund_performance,
+    "get_fund_holdings": get_fund_holdings,
+    "capital_inflow_in_sectors": capital_inflow_in_sectors,
+    "select_fund": select_fund,
 }
 
+# ═══════════════════════════════════════════════════════════════════
+# 辅助：供 prompt 使用的扁平化工具列表 JSON
+# ═══════════════════════════════════════════════════════════════════
 
-class ToolRegistry:
-    def __init__(self):
-        self._tools = {
-            "get_fund_nav": {
-                "name": "get_fund_nav",
-                "description": "获取基金业绩数据，包含近1/3/6/12月收益率、同类排名、夏普比率、最大回撤、年化波动率、最新净值",
-                "func": get_fund_nav,
-            },
-            "get_fund_holdings": {
-                "name": "get_fund_holdings",
-                "description": "获取基金最新季度持仓明细，包含前十大重仓股、持仓集中度、换手变化",
-                "func": get_fund_holdings,
-            },
-            "get_benchmark": {
-                "name": "get_benchmark",
-                "description": "获取基准指数(创业板50)近1/3/6/12月收益，并与基金收益对比计算各窗口超额收益",
-                "func": get_benchmark,
-            },
-        }
 
-    async def call(self, name: str, fund_code: str) -> dict:
-        """执行单个工具，返回 trim 后的结果"""
-        raw = await self._tools[name]["func"](fund_code)
-        if "error" in raw:
-            return raw
-        return {k: v for k, v in raw.items() if k not in _TRIM_KEYS.get(name, set())}
+def tools_prompt_json(indent: int = 2) -> str:
+    """返回扁平化的工具列表 JSON 字符串，用于嵌入 system prompt。
 
-    async def call_all(self, fund_code: str) -> dict[str, dict]:
-        """异步并发执行全部 3 个工具"""
-
-        async def _call_one(name: str) -> tuple[str, dict]:
-            try:
-                return name, await self.call(name, fund_code)
-            except Exception as e:
-                return name, {"error": str(e)}
-
-        tasks = [_call_one(name) for name in self._tools]
-        gathered = await asyncio.gather(*tasks)
-        return dict(gathered)
-
-    def get_tool_schemas(self) -> list[dict]:
-        """生成 OpenAI function calling 格式的工具定义"""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "fund_code": {"type": "string", "description": "6位基金代码"}
-                        },
-                        "required": ["fund_code"],
-                    },
-                },
-            }
-            for t in self._tools.values()
-        ]
+    OpenAI/DeepSeek API 格式为 {"type":"function","function":{...}}，
+    prompt 中只需要 function 对象本身。
+    """
+    flat = [t["function"] for t in TOOLS_SCHEMA]
+    return json.dumps(flat, ensure_ascii=False, indent=indent)

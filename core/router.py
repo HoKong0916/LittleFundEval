@@ -1,14 +1,11 @@
 import json
 from llm_client import local_chat
 from prompts.router import SYSTEM_PROMPT_ROUTER
-# from config.tools_yaml import get_tools_for_prompt
+from tools import tools_prompt_json
 
 def classify_intent(user_message: list) -> dict:
-    # tools_desc = get_tools_for_prompt()  # 从 tools.yaml 生成简短描述
-    # system_prompt = SYSTEM_PROMPT_ROUTER.format(tools=tools_desc)
-
     user_question = user_message[-1]["content"] if user_message else ""
-    system_prompt = SYSTEM_PROMPT_ROUTER.replace("{user_question}", user_question)
+    system_prompt = SYSTEM_PROMPT_ROUTER.replace("{tools_json}", tools_prompt_json()).replace("{user_question}", user_question)
     messages = [{"role":"system","content":system_prompt}]
 
 

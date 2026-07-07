@@ -4,65 +4,7 @@ SYSTEM_PROMPT_ROUTER = """
 你必须仅根据用户问题和可用的工具列表做出判断，不能猜测任何工具返回的结果。
 
 可用工具如下所示：
-[
-  {
-    "name": "search_fund",
-    "description": "根据关键词搜索基金，返回匹配的基金列表（代码、全称、类型）",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "keyword": {"type": "string", "description": "搜索关键词，如基金名称、代码、基金经理姓名"}
-      },
-      "required": ["keyword"]
-    }
-  },
-  {
-    "name": "get_fund_performance",
-    "description": "获取基金阶段收益与风险指标，包含近1/3/6/12月收益率、同类排名、最大回撤、夏普比率、年化波动率、最新净值",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "fund_code": {"type": "string", "description": "6位数字基金代码"}
-      },
-      "required": ["fund_code"]
-    }
-  },
-  {
-    "name": "get_fund_holdings",
-    "description": "获取基金最新季报的行业配置和前十大重仓股",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "fund_code": {"type": "string", "description": "6位数字基金代码"}
-      },
-      "required": ["fund_code"]
-    }
-  },
-  {
-    "name": "get_manager_info",
-    "description": "获取基金经理的从业年限、管理规模、历史回报和在管基金",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "fund_code": {"type": "string", "description": "6位数字基金代码"},
-        "manager_name": {"type": "string", "description": "基金经理姓名（可选，填写后可精确定位）"}
-      },
-      "required": ["fund_code"]
-    }
-  },
-  {
-    "name": "get_fund_ranking",
-    "description": "获取基金在同类中的百分位排名",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "fund_code": {"type": "string", "description": "6位数字基金代码"},
-        "period": {"type": "string", "enum": ["1M", "3M", "6M", "1Y", "3Y", "5Y"], "description": "排名周期，同上"}
-      },
-      "required": ["fund_code", "period"]
-    }
-  }
-]
+{tools_json}
 
 
 1. DirectAnswer（直接回答）
@@ -85,7 +27,7 @@ SYSTEM_PROMPT_ROUTER = """
 例："帮我找一只最大回撤小于 10%、规模大于 5 亿的消费基金。" → 需要先搜索消费基金列表，再逐个检查回撤和规模，无法预先确定全部候选。
 
 重要规则：
-- **名称 vs 代码**：所有数据工具（get_fund_performance / get_fund_holdings / get_manager_info / get_fund_ranking）都要求输入6位数字代码。如果用户给的是基金名称（中文，非6位纯数字），tools_needed 必须填 search_fund 作为起始工具，不能直接填数据工具。
+- **名称 vs 代码**：所有数据工具（get_fund_performance / get_fund_holdings）都要求输入6位数字代码。如果用户给的是基金名称（中文，非6位纯数字），tools_needed 必须填 search_fund 作为起始工具，不能直接填数据工具。
 - 如果问题中包含"先确认某基金是否满足 X，如果不是再……"这类复合意图，第一步工具一定是用于确认该基金 X 属性的工具。但若用户给的是基金名称，仍需先 search_fund 获取代码。
 - 即使问题中提到了具体基金，如果只涉及单一维度查询（如仅问收益、仅问风险、仅问持仓），也应走 ReAct 而非 REWOO。
 
@@ -185,7 +127,7 @@ SYSTEM_PROMPT_ROUTER = """
 输出：
 {
   "category": "REWOO",
-  "tools_needed": ["get_fund_performance", "get_fund_holdings", "get_manager_info", "get_fund_ranking"],
+  "tools_needed": ["get_fund_performance", "get_fund_holdings"],
   "reasoning": "指定单只基金的全面评估，多维度数据无依赖，可并发"
 }
 
@@ -194,7 +136,7 @@ SYSTEM_PROMPT_ROUTER = """
 输出：
 {
   "category": "REWOO",
-  "tools_needed": ["search_fund", "get_fund_performance", "get_fund_holdings", "get_manager_info"],
+  "tools_needed": ["search_fund", "get_fund_performance", "get_fund_holdings"],
   "reasoning": "明确两只基金的对比，系统会先解析代码再并发拉取数据"
 }
 

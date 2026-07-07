@@ -19,7 +19,7 @@ async def llm_direct_answer(user_message: list) -> None:
 
 
 async def main():
-    user_message = "东方人工智能主题混合C，是连涨了吗？连续涨了几天？"
+    user_message = "最近AI眼镜板块如何？该板块方向下近期哪个基金收益更好，值得建仓"
     user_input = [{"role":"user","content":user_message}]
     decision = classify_intent(user_input)
 

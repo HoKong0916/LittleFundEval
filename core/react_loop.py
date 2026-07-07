@@ -1,23 +1,29 @@
+import json
 import re
 
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
-from tools.search_fund import search_fund
-from tools.fund_performance import get_fund_performance
-
-# 工具名 → async 函数映射
-_TOOLS = {
-    "search_fund": search_fund,
-    "get_fund_performance": get_fund_performance,
-}
+from tools import TOOLS_MAP, TOOLS_SCHEMA, tools_prompt_json
 
 
 MAX_STEPS = 5
 
 _ACTION_RE = re.compile(r"Action:\s*(\w+)\((.*)\)")
 _PARAM_RE = re.compile(r'(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"')
+_ARRAY_PARAM_RE = re.compile(r'(\w+)\s*=\s*(\[[^\]]*\])')
 _THOUGHT_RE = re.compile(r"Thought:\s*(.*)")
 _FINAL_RE = re.compile(r"Final Answer:\s*(.*)", re.DOTALL)
+
+
+def _parse_params(raw: str) -> dict:
+    """解析 Action 参数，同时支持字符串值和数组值。"""
+    params = dict(_PARAM_RE.findall(raw))
+    for m in _ARRAY_PARAM_RE.finditer(raw):
+        try:
+            params[m.group(1)] = json.loads(m.group(2))
+        except json.JSONDecodeError:
+            pass
+    return params
 
 
 def parse_step(buffer: str) -> dict:
@@ -34,7 +40,7 @@ def parse_step(buffer: str) -> dict:
     action_m = _ACTION_RE.search(buffer)
     if action_m:
         tool_name = action_m.group(1).strip()
-        params = dict(_PARAM_RE.findall(action_m.group(2)))
+        params = _parse_params(action_m.group(2))
         return {"thought": thought, "tool": tool_name, "params": params}
 
     return {"thought": thought, "parse_error": True}
@@ -49,7 +55,7 @@ def _try_parse_action(buffer: str) -> dict | None:
     if not action_m:
         return None
     tool_name = action_m.group(1).strip()
-    params = dict(_PARAM_RE.findall(action_m.group(2)))
+    params = _parse_params(action_m.group(2))
     thought_m = _THOUGHT_RE.search(buffer)
     thought = thought_m.group(1).strip() if thought_m else ""
     return {"thought": thought, "tool": tool_name, "params": params}
@@ -57,7 +63,7 @@ def _try_parse_action(buffer: str) -> dict | None:
 
 async def _dispatch(tool_name: str, params: dict) -> str:
     """执行工具调用，返回 Observation 文本。"""
-    fn = _TOOLS.get(tool_name)
+    fn = TOOLS_MAP.get(tool_name)
     if fn is None:
         return f"工具 '{tool_name}' 尚未实现"
     try:
@@ -71,6 +77,7 @@ async def run_react_loop(user_message: list, tools_needed: list) -> None:
     user_question = user_message[-1]["content"] if user_message else ""
     system_prompt = (
         SYSTEM_PROMPT_REACT
+        .replace("{tools_json}", tools_prompt_json())
         .replace("{user_question}", user_question)
         .replace("{initial_tools}", str(tools_needed))
     )
