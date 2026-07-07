@@ -27,7 +27,11 @@ async def search_fund(keyword: str) -> str:
     # 步骤3：解析 JSON
     data = json.loads(json_str)
 
-    # 获取 Datas 下第一个值
-    first_code = data["Datas"][0]["CODE"]
+    lines = []
 
-    return first_code
+    first_code = data["Datas"][0]["CODE"]
+    lines.append("基金代码: " + first_code)
+    first_name = data["Datas"][0]["NAME"]
+    lines.append("基金名称: " + first_name)
+
+    return "\n".join(lines)
