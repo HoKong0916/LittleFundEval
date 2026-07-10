@@ -14,6 +14,7 @@ SYSTEM_PROMPT_ROUTER = """
 例："什么是最大回撤？""ETF和普通基金有什么区别？""定投是什么意思？"
 
 即使问题看起来简单，如果涉及具体基金或需要实时数据，就绝不能走这条。
+板块/行业表现类问题（如"消费电子最近表现如何？""人工智能板块资金流向怎么样？"）需要查询数据，不能走 DirectAnswer。
 
 
 2. ReAct（逐步推理，一次一个工具）
@@ -131,7 +132,34 @@ SYSTEM_PROMPT_ROUTER = """
   "reasoning": "指定单只基金的全面评估，多维度数据无依赖，可并发"
 }
 
-示例 9：REWOO（多只基金对比）
+示例 9：ReAct（板块/行业表现查询 — 容易误判为 DirectAnswer）
+用户：消费电子最近表现如何？
+输出：
+{
+  "category": "ReAct",
+  "tools_needed": ["select_fund"],
+  "reasoning": "板块表现需查询实时数据，非通用知识问题"
+}
+
+示例 10：ReAct（板块资金流向查询）
+用户：人工智能板块资金流向怎么样？
+输出：
+{
+  "category": "ReAct",
+  "tools_needed": ["capital_inflow_in_sectors"],
+  "reasoning": "板块资金流向需查询实时数据"
+}
+
+示例 11：ReAct（板块内选基金）
+用户：新能源板块有哪些表现不错的基金？
+输出：
+{
+  "category": "ReAct",
+  "tools_needed": ["select_fund"],
+  "reasoning": "需先筛选板块内基金再判断表现"
+}
+
+示例 12：REWOO（多只基金对比）
 用户：对比一下张坤的易方达蓝筹和刘彦春的景顺长城新兴成长，从收益、风险和持仓来看。
 输出：
 {

@@ -4,6 +4,8 @@ import re
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
 from tools import TOOLS_MAP, TOOLS_SCHEMA, tools_prompt_json
+from core.memory import MemoryManager
+from core.topic import is_same_topic
 
 
 MAX_STEPS = 5
@@ -73,7 +75,8 @@ async def _dispatch(tool_name: str, params: dict) -> str:
         return f"工具调用失败: {e}"
 
 
-async def run_react_loop(user_message: list, tools_needed: list) -> None:
+async def run_react_loop(user_message: list, tools_needed: list,
+                         memory: MemoryManager, session_id: str) -> str:
     user_question = user_message[-1]["content"] if user_message else ""
     system_prompt = (
         SYSTEM_PROMPT_REACT
@@ -81,11 +84,20 @@ async def run_react_loop(user_message: list, tools_needed: list) -> None:
         .replace("{user_question}", user_question)
         .replace("{initial_tools}", str(tools_needed))
     )
+
+    # 加载历史对话 —— 仅当与当前问题话题相关时才拼接
+    history = await memory.load_messages(session_id)
     messages = [{"role": "system", "content": system_prompt}]
+    if history and is_same_topic(user_question, history):
+        messages.extend(history)
+    elif history:
+        print("🧹 当前问题与历史话题不相关，已清空上下文")
+
+    final_answer = ""
 
     for step in range(1, MAX_STEPS + 1):
         print(f"\n{'─' * 50}")
-        print(f"[步骤 {step}/{MAX_STEPS}] ", end="", flush=True)
+        print(f"📍 步骤 {step}/{MAX_STEPS} ", end="", flush=True)
 
         buffer = ""
         parsed = None
@@ -126,17 +138,18 @@ async def run_react_loop(user_message: list, tools_needed: list) -> None:
             parsed = parse_step(buffer)
 
         if "parse_error" in parsed:
-            print("[错误] 模型输出无法解析，终止")
+            print("❌ 模型输出无法解析，终止")
+            final_answer = "[错误] 模型输出无法解析"
             break
 
         if "final_answer" in parsed:
-            # Final Answer 内容已在流式中实时打印，此处仅结束循环
+            final_answer = parsed["final_answer"]
             break
 
         # 工具调用
         tool_name = parsed["tool"]
         params_str = ", ".join(f'{k}="{v}"' for k, v in parsed["params"].items())
-        print(f"⏳ → {tool_name}({params_str})")
+        print(f"⏳ {tool_name}({params_str})")
 
         observation = await _dispatch(tool_name, parsed["params"])
         print(f"📋 {observation}")
@@ -148,7 +161,7 @@ async def run_react_loop(user_message: list, tools_needed: list) -> None:
         # 步数耗尽但未产出 Final Answer → 强制要求模型基于已有信息总结
         if messages:
             print(f"\n{'─' * 50}")
-            print("[步骤 MAX] 已达最大推理步数，强制生成总结...\n")
+            print("⚠️ 已达最大推理步数，强制生成总结...\n")
             messages.append({
                 "role": "user",
                 "content": (
@@ -156,9 +169,14 @@ async def run_react_loop(user_message: list, tools_needed: list) -> None:
                     "不要再调用任何工具。用已获取的数据给出客观分析，末尾附上风险提示。"
                 ),
             })
+            fallback_buffer = ""
             async for chunk in cloud_chat(messages):
                 if chunk["type"] == "text":
+                    fallback_buffer += chunk["content"]
                     print(chunk["content"], end="", flush=True)
                 elif chunk["type"] == "done":
                     break
             print()
+            final_answer = fallback_buffer
+
+    return final_answer

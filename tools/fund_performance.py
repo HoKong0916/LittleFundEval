@@ -247,6 +247,6 @@ def _format(d: dict, errors: list[str]) -> str:
     # ── 数据源（有错误时显示）──
     if errors:
         lines.append("")
-        lines.append(f"⚠ 部分数据源异常: {'; '.join(errors)}")
+        lines.append(f"⚠️ 部分数据源异常: {'; '.join(errors)}")
 
     return "\n".join(lines)
