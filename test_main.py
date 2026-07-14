@@ -37,37 +37,44 @@ def _load_session_id() -> str:
 
 
 async def main():
-    """测试入口：加载历史 → 话题检测 → 路由分发 → 执行 → 存入记忆 → 异步摘要化。"""
+    """测试入口：检查摘要标记 → 摘要 → 加载历史 → 话题检测 → 路由 → 执行 → 打摘要标记。
+
+    摘要不在 N 轮结束时执行，而是打在标记上，由 N+1 轮启动时同步完成。
+    这样摘要永远在两次请求之间的"安全窗口"执行，避免了与 append_message 的并发竞态。
+    """
     session_id = _load_session_id()
-    user_message = "上述两个板块让你选，你觉得近期哪个适合建仓？"
+    user_message = "我当前有持有存储板块的，你觉得我是否需要减仓，减出来的钱，你觉得该在哪个板块建仓呢？"
 
     async with MemoryManager() as memory:
-         # ── 只加载一次 ──
+        # ── N+1 轮开始：检查上一轮是否留下摘要标记 ──
+        need_summary = await memory.check_and_clear_summary_flag(session_id)
+        if need_summary:
+            await summarize_session(memory, session_id)
+
+        # ── 加载历史 ──
         history = await memory.load_messages(session_id)
         has_context = bool(history) and await is_same_topic(user_message, history)
 
         # ── 路由 ──
-        if has_context:
-            decision = {"category": "DirectAnswer", "tools_needed": [], "reasoning": "历史对话中已有相关分析数据，直接利用历史上下文回答"}
-            print(f"📚 {decision['reasoning']}")
-        else:
-            decision = await classify_intent([{"role": "user", "content": user_message}])
-        
+        decision = await classify_intent([{"role": "user", "content": user_message}], history if has_context else None)
+        print(f"🧭 {decision['category']}: {decision['reasoning']}")
+
         print(f"\n🚀 执行 {decision['category']} 路径\n")
 
-        # ── 执行，把 history 和 has_context 传下去 ──
+        # ── 执行 ──
+        msg_list = [{"role": "user", "content": user_message}]
         if decision["category"] == "DirectAnswer":
-            final_answer = await run_direct_answer(user_message, history, has_context)
+            final_answer = await run_direct_answer(msg_list, history, has_context)
         elif decision["category"] == "ReAct":
-            final_answer = await run_react_loop(user_message, decision["tools_needed"],history, has_context)
+            final_answer = await run_react_loop(msg_list, decision["tools_needed"], history, has_context)
 
-        # ── 成功后才成对存入 ──
+        # ── 存入记忆 ──
         if final_answer:
             await memory.append_message(session_id, {"role": "user", "content": user_message})
             await memory.append_message(session_id, {"role": "assistant", "content": final_answer})
 
-            # 异步摘要化：fire-and-forget，不阻塞当前响应
-            asyncio.create_task(summarize_session(memory, session_id))
+            # N 轮结束：只打标记，不执行摘要（留给 N+1 轮启动时处理）
+            await memory.set_summary_flag(session_id)
         else:
             print("⚠️ 未获得有效回复，不存入历史")
 

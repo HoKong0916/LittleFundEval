@@ -11,7 +11,7 @@ async def _get_model_name() -> str:
     global _model_name
     if _model_name is None:
         models = await _client.models.list()
-        _model_name = next(iter(models)).id
+        _model_name = models.data[0].id
     return _model_name
 
 

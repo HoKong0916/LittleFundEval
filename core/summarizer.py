@@ -1,12 +1,17 @@
 """对话摘要引擎 —— 在 token 超出阈值时从旧→新压缩助手回答。
 
-由调用方在 append_message 之后 fire-and-forget 调用：
-    asyncio.create_task(summarize_session(memory, sid))
+由调用方在 N+1 轮开始时同步调用（await），不在 N 轮结束时 fire-and-forget：
+
+    N 轮结束:  memory.set_summary_flag(sid)       # 只打标记
+    N+1 轮开始: if memory.check_and_clear_summary_flag(sid):  # GETDEL 原子
+                   await summarize_session(memory, sid)       # 同步执行
+               history = await memory.load_messages(sid)      # 再加载历史
 
 规则：
 - 只压缩 assistant 消息，user 消息不动
 - 从最旧回答开始，摘完一条重算一次，total ≤ 阈值即停
 - 极端情况（5 条全摘完仍超阈值）不再处理
+- 摘要永远在两次请求之间的"安全窗口"执行，无并发写入风险
 """
 
 import tiktoken
@@ -38,11 +43,21 @@ async def _summarize_one(content: str) -> str:
 async def summarize_session(memory, session_id: str) -> None:
     """入口：加载会话消息 → 判断是否需要摘要 → 逐条压缩 → 写回。
 
+    顶层捕获所有异常，确保以 fire-and-forget（create_task）方式调用时
+    不会因 Redis 断连 / LLM 错误等原因泄露 "Task exception was never retrieved"。
+
+    CLI 场景建议直接 await，确保摘要完成后再退出 async with 块；
+    FastAPI 多用户场景用 create_task 即可，本函数的 try/except 保证安全。
+
     Args:
         memory: MemoryManager 实例
         session_id: 会话 ID
     """
-    messages = await memory.load_messages(session_id)
+    try:
+        messages = await memory.load_messages(session_id)
+    except Exception:
+        return
+
     if len(messages) < 2:
         return
 
@@ -69,4 +84,7 @@ async def summarize_session(memory, session_id: str) -> None:
             break
 
     if changed:
-        await memory._overwrite_messages(session_id, messages)
+        try:
+            await memory._overwrite_messages(session_id, messages)
+        except Exception:
+            pass

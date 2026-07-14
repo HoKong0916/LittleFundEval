@@ -88,6 +88,36 @@ class MemoryManager:
     def _meta_key(session_id: str) -> str:
         return f"session:{session_id}:meta"
 
+    @staticmethod
+    def _summary_flag_key(session_id: str) -> str:
+        return f"session:{session_id}:needs_summary"
+
+    # ── 摘要标记 ──────────────────────────────────────────────
+
+    async def set_summary_flag(self, session_id: str) -> None:
+        """N 轮结束后打标记：下次请求需要先摘要再加载历史。"""
+        if self._connected:
+            key = self._summary_flag_key(session_id)
+            try:
+                await self._redis.set(key, "1", ex=TTL_SECONDS)
+            except Exception:
+                self._redis = None
+
+    async def check_and_clear_summary_flag(self, session_id: str) -> bool:
+        """N+1 轮开始时检查标记。GETDEL 原子操作：读取并删除，只有一人能拿到 True。
+
+        返回 True 表示需要先执行摘要再加载历史。
+        """
+        if not self._connected:
+            return False
+        key = self._summary_flag_key(session_id)
+        try:
+            result = await self._redis.getdel(key)
+            return result is not None
+        except Exception:
+            self._redis = None
+            return False
+
     # ── 消息读写 ──────────────────────────────────────────────
 
     async def load_messages(self, session_id: str) -> list[dict]:
