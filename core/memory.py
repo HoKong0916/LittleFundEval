@@ -21,7 +21,6 @@ TTL_SECONDS = 1800         # 30 分钟无操作过期
 RETRY_MAX = 3              # 连接重试次数
 RETRY_DELAY = 1.0          # 重试间隔（秒）
 
-
 class MemoryManager:
     """会话短期记忆管理器。
 
@@ -121,6 +120,21 @@ class MemoryManager:
             buf = self._fallback.setdefault(session_id, [])
             buf.append(msg)
             self._fallback[session_id] = buf[-MAX_MESSAGES:]
+
+    # ── 摘要化 ────────────────────────────────────────────────
+
+    async def _overwrite_messages(self, session_id: str, messages: list[dict]) -> None:
+        """用新消息列表覆盖 Redis / fallback 中的历史记录。"""
+        if self._connected:
+            key = self._msg_key(session_id)
+            async with self._redis.pipeline() as pipe:
+                pipe.delete(key)
+                for m in messages:
+                    pipe.rpush(key, json.dumps(m, ensure_ascii=False))
+                pipe.expire(key, TTL_SECONDS)
+                await pipe.execute()
+        else:
+            self._fallback[session_id] = messages
 
     # ── 元数据 ────────────────────────────────────────────────
 

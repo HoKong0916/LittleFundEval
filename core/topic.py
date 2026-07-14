@@ -4,10 +4,7 @@
   1. 提取中文 bigram + 6 位基金代码作为特征集合
   2. 计算 Jaccard 相似度
   3. >0.25 → 直接返回 True（明确相关）
-     <0.05 → 直接返回 False（明确不相关）
-     中间模糊区间 → fallback 本地 LLM
-
-约 80% 请求走快速路径，无需启动 LLM。
+     其余 → fallback 本地 LLM（由 LLM 做语义兜底，防止"上述两个板块"类指代表达被 Jaccard 误杀）
 """
 
 import re
@@ -32,7 +29,7 @@ def _features(text: str) -> set[str]:
     return feats
 
 
-def is_same_topic(current: str, history: list[dict]) -> bool:
+async def is_same_topic(current: str, history: list[dict]) -> bool:
     """判断当前问题与历史对话是否属于同一话题（追问 / 对比 / 细化）。
 
     无历史时返回 False。
@@ -56,17 +53,18 @@ def is_same_topic(current: str, history: list[dict]) -> bool:
     union = cur_f | prev_f
     sim = len(overlap) / len(union)
 
-    # ── 快速路径 ──
+    # ── 快速路径：仅保留高置信度快速通过 ──
     if sim > 0.25:
         return True
-    if sim < 0.05:
-        return False
+    # 其余全部走 LLM 兜底（去除 <0.05 快拒，防止"上述两个板块"类指代表达被误杀）
 
     # ── 模糊区间 → LLM ──
-    last_q = prev_user[-1]
-    prompt = SYSTEM_PROMPT_TOPIC.format(last_q=last_q[:300], current=current[:300])
+    # 传递最近 5 轮用户问题作为上下文，帮助 LLM 理解指代关系
+    recent_qs = prev_user[-5:]
+    recent_text = " | ".join(q[:300] for q in recent_qs)
+    prompt = SYSTEM_PROMPT_TOPIC.format(recent_qs=recent_text, current=current[:600])
     try:
-        result = local_chat([{"role": "user", "content": prompt}], temperature=0.0)
+        result = await local_chat([{"role": "user", "content": prompt}], temperature=0.0)
         return result is not None and "YES" in result.strip().upper()
     except Exception:
         return True  # LLM 不可用，保守保留

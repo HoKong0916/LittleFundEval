@@ -3,9 +3,7 @@ import re
 
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
-from tools import TOOLS_MAP, TOOLS_SCHEMA, tools_prompt_json
-from core.memory import MemoryManager
-from core.topic import is_same_topic
+from tools import TOOLS_MAP, tools_prompt_json
 
 
 MAX_STEPS = 5
@@ -75,8 +73,7 @@ async def _dispatch(tool_name: str, params: dict) -> str:
         return f"工具调用失败: {e}"
 
 
-async def run_react_loop(user_message: list, tools_needed: list,
-                         memory: MemoryManager, session_id: str) -> str:
+async def run_react_loop(user_message: list, tools_needed: list, history: list[dict], has_context: bool) -> str:
     user_question = user_message[-1]["content"] if user_message else ""
     system_prompt = (
         SYSTEM_PROMPT_REACT
@@ -85,13 +82,9 @@ async def run_react_loop(user_message: list, tools_needed: list,
         .replace("{initial_tools}", str(tools_needed))
     )
 
-    # 加载历史对话 —— 仅当与当前问题话题相关时才拼接
-    history = await memory.load_messages(session_id)
     messages = [{"role": "system", "content": system_prompt}]
-    if history and is_same_topic(user_question, history):
+    if has_context:
         messages.extend(history)
-    elif history:
-        print("🧹 当前问题与历史话题不相关，已清空上下文")
 
     final_answer = ""
 

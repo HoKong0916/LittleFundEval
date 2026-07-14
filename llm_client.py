@@ -1,29 +1,29 @@
 import json, asyncio
-from openai import OpenAI, AsyncOpenAI
+from openai import AsyncOpenAI
 from config import LLAMA_CPP_BASE_URL, DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY, DEEPSEEK_MODEL
 
-_client = OpenAI(base_url=LLAMA_CPP_BASE_URL, api_key="not-needed")
+_client = AsyncOpenAI(base_url=LLAMA_CPP_BASE_URL, api_key="not-needed")
 _deepseek_client = AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=DEEPSEEK_API_KEY)
 _model_name: str | None = None
 
 
-def _get_model_name() -> str:
+async def _get_model_name() -> str:
     global _model_name
     if _model_name is None:
-        _model_name = next(iter(_client.models.list())).id
+        models = await _client.models.list()
+        _model_name = next(iter(models)).id
     return _model_name
 
 
-def local_chat(messages: list[dict], temperature: float = 0.0) -> str:
+async def local_chat(messages: list[dict], temperature: float = 0.0) -> str:
     """本地 llama.cpp — 轻量分类。"""
     from llama_launcher import start_server
     start_server()
-    response = _client.chat.completions.create(
-        model=_get_model_name(),
+    response = await _client.chat.completions.create(
+        model=await _get_model_name(),
         messages=messages,
-        temperature=temperature
+        temperature=temperature,
     )
-    # stop_server()
     return response.choices[0].message.content
 
 

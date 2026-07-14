@@ -49,7 +49,7 @@ def _fetch_board_tags() -> list[dict[str, str]]:
 
 # ── LLM 匹配板块 + 时间段 ──
 
-def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict:
+async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict:
     """用本地 LLM 将用户自然语言映射到 (板块ID, 排序key)。
 
     返回:
@@ -65,7 +65,7 @@ def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict:
         {"role": "user", "content": user_query},
     ]
 
-    response = local_chat(messages, temperature=0.0)
+    response = await local_chat(messages, temperature=0.0)
     return json.loads(response)
 
 
@@ -78,7 +78,7 @@ async def select_fund(user_query: str) -> str:
         result = await select_fund("AI应用板块近1月前十收益")
     """
     tags = _fetch_board_tags()
-    match = _match_user_query(user_query, tags)
+    match = await _match_user_query(user_query, tags)
 
     requests_url = "https://fund.eastmoney.com/data/FundGuideapi.aspx"
     requests_payload = {

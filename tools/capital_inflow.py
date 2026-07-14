@@ -21,7 +21,7 @@ def _format_flow(val: float) -> str:
     return f"{sign}{yi:.2f}亿"
 
 
-def _match_sectors(user_sectors: list[str], available_names: list[str]) -> list[str]:
+async def _match_sectors(user_sectors: list[str], available_names: list[str]) -> list[str]:
     """用本地 LLM 将用户输入的板块名模糊匹配到 API 实际返回的板块名。
 
     返回与 user_sectors 一一对应的匹配结果，匹配不到的为空字符串。
@@ -36,7 +36,7 @@ def _match_sectors(user_sectors: list[str], available_names: list[str]) -> list[
     ]
 
     try:
-        response = local_chat(messages, temperature=0.0)
+        response = await local_chat(messages, temperature=0.0)
         result = json.loads(response)
         matched = result.get("matched", [])
         # 保证长度一致
@@ -102,7 +102,7 @@ async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
                 if name not in all_sector_names:
                     all_sector_names.append(name)
 
-        matched_sectors = _match_sectors(sectors, all_sector_names)
+        matched_sectors = await _match_sectors(sectors, all_sector_names)
 
         # ── 指定板块模式：按板块维度展示 ──
         for user_input, matched_name in zip(sectors, matched_sectors):
