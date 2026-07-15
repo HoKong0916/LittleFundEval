@@ -82,11 +82,19 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
         .replace("{initial_tools}", str(tools_needed))
     )
 
+    if has_context:
+        system_prompt += (
+            "\n\n## 历史对话（上下文参考）\n"
+            "以下是之前的对话记录，仅供你判断哪些数据已有。"
+            "但用户当前问题可能包含历史中不存在的数据，"
+            "你必须通过工具获取最新数据，不能直接复制历史回答。"
+        )
+
     messages = [{"role": "system", "content": system_prompt}]
     if has_context:
-        messages.extend(history)
+        messages.extend(history)  # 完整传入，不截断
 
-    final_answer = ""
+    called_tools: set[str] = set()
 
     for step in range(1, MAX_STEPS + 1):
         print(f"\n{'─' * 50}")
@@ -136,11 +144,21 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
             break
 
         if "final_answer" in parsed:
+            # 第一步就想直接回答 + 路由指定了工具 + 还没调过工具 → 拒绝，要求先调工具
+            if step == 1 and tools_needed and not called_tools:
+                print("🛡️ 拦截：第1步试图跳过工具调用，注入纠正提示")
+                messages.append({"role": "assistant", "content": buffer})
+                messages.append({"role": "user", "content":
+                    "你不能直接回答。请先调用工具获取数据——"
+                    "用户问的数据可能不在历史中。"
+                })
+                continue
             final_answer = parsed["final_answer"]
             break
 
         # 工具调用
         tool_name = parsed["tool"]
+        called_tools.add(tool_name)
         params_str = ", ".join(f'{k}="{v}"' for k, v in parsed["params"].items())
         print(f"⏳ {tool_name}({params_str})")
 

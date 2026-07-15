@@ -41,7 +41,9 @@ async def is_same_topic(current: str, history: list[dict]) -> bool:
     if not prev_user:
         return False
 
-    prev_text = " ".join(prev_user[-3:])
+    # 特征提取纳入 assistant 消息：基金代码、板块名等关键信息在助手回复中
+    prev_all = [m["content"] for m in history if m.get("role") in ("user", "assistant")]
+    prev_text = " ".join(prev_all[-10:])  # 最近 5 轮完整对话
 
     cur_f = _features(current)
     prev_f = _features(prev_text)
@@ -59,9 +61,13 @@ async def is_same_topic(current: str, history: list[dict]) -> bool:
     # 其余全部走 LLM 兜底（去除 <0.05 快拒，防止"上述两个板块"类指代表达被误杀）
 
     # ── 模糊区间 → LLM ──
-    # 传递最近 5 轮用户问题作为上下文，帮助 LLM 理解指代关系
-    recent_qs = prev_user[-5:]
-    recent_text = " | ".join(q[:300] for q in recent_qs)
+    # 传递最近 5 轮完整对话（用户+助手），帮助 LLM 理解指代关系
+    recent_turns = []
+    all_msgs = [m for m in history if m.get("role") in ("user", "assistant")]
+    for m in all_msgs[-10:]:  # 最近 5 轮（每轮 user+assistant = 2 条）
+        role = "用户" if m["role"] == "user" else "助手"
+        recent_turns.append(f"{role}：{m['content']}")
+    recent_text = "\n".join(recent_turns)
     prompt = SYSTEM_PROMPT_TOPIC.format(recent_qs=recent_text, current=current[:600])
     try:
         result = await local_chat([{"role": "user", "content": prompt}], temperature=0.0)

@@ -15,9 +15,9 @@ _PERIOD_LABEL = {
 
 
 def _format_flow(val: float) -> str:
-    """资金流量格式化为亿，正数红色标记，负数绿色标记。"""
+    """资金流量格式化为亿，正数带 + 号，负数 - 号。"""
     yi = val / 1e8
-    sign = "+" if yi > 0 else ""
+    sign = "+" if yi > 0 else "-"
     return f"{sign}{yi:.2f}亿"
 
 

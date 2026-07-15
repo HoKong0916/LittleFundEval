@@ -45,7 +45,7 @@ async def get_fund_performance(fund_code: str) -> str:
 
 
 async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient) -> None:
-    """从丹橘API提取收益、排名、回撤、规模、基本信息。"""
+    """从丹橘API提取收益、排名、规模、基本信息。"""
     r = await client.get(f"https://danjuanfunds.com/djapi/fund/{fund_code}", timeout=10)
     r.raise_for_status()
     data = r.json()

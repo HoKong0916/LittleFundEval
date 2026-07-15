@@ -1,8 +1,9 @@
 """会话记忆层 —— 基于 Redis 的短期对话上下文管理。
 
 Key 结构：
-    session:{id}:messages  →  List（用户 ↔ 助手对话，LTRIM 保持最近 10 条）
-    session:{id}:meta      →  Hash（创建时间、最后活跃时间）
+    session:{id}:messages      →  List（用户 ↔ 助手对话，LTRIM 保持最近 10 条）
+    session:{id}:meta          →  Hash（最后活跃时间）
+    session:{id}:needs_summary →  String（摘要标记，N 轮结束打标，N+1 轮启动时 GETDEL 原子消费）
 
 Redis 不可用时自动降级为内存 dict。
 """

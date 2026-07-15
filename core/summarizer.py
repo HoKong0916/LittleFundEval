@@ -10,12 +10,13 @@
 规则：
 - 只压缩 assistant 消息，user 消息不动
 - 从最旧回答开始，摘完一条重算一次，total ≤ 阈值即停
-- 极端情况（5 条全摘完仍超阈值）不再处理
+- 极端情况（所有 assistant 消息全摘完仍超阈值）不再处理
 - 摘要永远在两次请求之间的"安全窗口"执行，无并发写入风险
 """
 
 import tiktoken
 
+from core.memory import MemoryManager
 from llm_client import local_chat
 from prompts.summarizer import SYSTEM_PROMPT_SUMMARIZER
 
@@ -40,7 +41,7 @@ async def _summarize_one(content: str) -> str:
     return await local_chat(messages, temperature=0.0)
 
 
-async def summarize_session(memory, session_id: str) -> None:
+async def summarize_session(memory: MemoryManager, session_id: str) -> None:
     """入口：加载会话消息 → 判断是否需要摘要 → 逐条压缩 → 写回。
 
     顶层捕获所有异常，确保以 fire-and-forget（create_task）方式调用时

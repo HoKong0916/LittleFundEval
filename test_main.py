@@ -43,7 +43,7 @@ async def main():
     这样摘要永远在两次请求之间的"安全窗口"执行，避免了与 append_message 的并发竞态。
     """
     session_id = _load_session_id()
-    user_message = "我当前有持有存储板块的，你觉得我是否需要减仓，减出来的钱，你觉得该在哪个板块建仓呢？"
+    user_message = "那这两个光模块相关的基金，你更推荐哪个？"
 
     async with MemoryManager() as memory:
         # ── N+1 轮开始：检查上一轮是否留下摘要标记 ──
