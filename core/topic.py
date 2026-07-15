@@ -68,7 +68,7 @@ async def is_same_topic(current: str, history: list[dict]) -> bool:
         role = "用户" if m["role"] == "user" else "助手"
         recent_turns.append(f"{role}：{m['content']}")
     recent_text = "\n".join(recent_turns)
-    prompt = SYSTEM_PROMPT_TOPIC.format(recent_qs=recent_text, current=current[:600])
+    prompt = SYSTEM_PROMPT_TOPIC.replace("{history_context}", recent_text).replace("{user_question}", current[:600])
     try:
         result = await local_chat([{"role": "user", "content": prompt}], temperature=0.0)
         return result is not None and "YES" in result.strip().upper()

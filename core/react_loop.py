@@ -3,7 +3,8 @@ import re
 
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
-from tools import TOOLS_MAP, tools_prompt_json
+from tools import tools_prompt_json
+from core.dispatch import dispatch_tool
 
 
 MAX_STEPS = 5
@@ -61,18 +62,6 @@ def _try_parse_action(buffer: str) -> dict | None:
     return {"thought": thought, "tool": tool_name, "params": params}
 
 
-async def _dispatch(tool_name: str, params: dict) -> str:
-    """执行工具调用，返回 Observation 文本。"""
-    fn = TOOLS_MAP.get(tool_name)
-    if fn is None:
-        return f"工具 '{tool_name}' 尚未实现"
-    try:
-        result = await fn(**params)
-        return result if isinstance(result, str) else str(result)
-    except Exception as e:
-        return f"工具调用失败: {e}"
-
-
 async def run_react_loop(user_message: list, tools_needed: list, history: list[dict], has_context: bool) -> str:
     user_question = user_message[-1]["content"] if user_message else ""
     system_prompt = (
@@ -94,7 +83,7 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
     if has_context:
         messages.extend(history)  # 完整传入，不截断
 
-    called_tools: set[str] = set()
+
 
     for step in range(1, MAX_STEPS + 1):
         print(f"\n{'─' * 50}")
@@ -145,7 +134,7 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
 
         if "final_answer" in parsed:
             # 第一步就想直接回答 + 路由指定了工具 + 还没调过工具 → 拒绝，要求先调工具
-            if step == 1 and tools_needed and not called_tools:
+            if step == 1 and tools_needed:
                 print("🛡️ 拦截：第1步试图跳过工具调用，注入纠正提示")
                 messages.append({"role": "assistant", "content": buffer})
                 messages.append({"role": "user", "content":
@@ -158,11 +147,10 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
 
         # 工具调用
         tool_name = parsed["tool"]
-        called_tools.add(tool_name)
         params_str = ", ".join(f'{k}="{v}"' for k, v in parsed["params"].items())
         print(f"⏳ {tool_name}({params_str})")
 
-        observation = await _dispatch(tool_name, parsed["params"])
+        observation = await dispatch_tool(tool_name, parsed["params"])
         print(f"📋 {observation}")
 
         messages.append({"role": "assistant", "content": buffer})

@@ -7,6 +7,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from core.router import classify_intent
 from core.react_loop import run_react_loop
+from core.rewoo_loop import run_rewoo_loop
 from core.topic import is_same_topic
 from core.direct_answer import run_direct_answer
 from core.memory import MemoryManager
@@ -43,7 +44,7 @@ async def main():
     这样摘要永远在两次请求之间的"安全窗口"执行，避免了与 append_message 的并发竞态。
     """
     session_id = _load_session_id()
-    user_message = "那这两个光模块相关的基金，你更推荐哪个？"
+    user_message = "今日机器人板块如何？"
 
     async with MemoryManager() as memory:
         # ── N+1 轮开始：检查上一轮是否留下摘要标记 ──
@@ -67,6 +68,8 @@ async def main():
             final_answer = await run_direct_answer(msg_list, history, has_context)
         elif decision["category"] == "ReAct":
             final_answer = await run_react_loop(msg_list, decision["tools_needed"], history, has_context)
+        elif decision["category"] == "REWOO":
+            final_answer = await run_rewoo_loop(msg_list, decision["tools_needed"], history, has_context)
 
         # ── 存入记忆 ──
         if final_answer:

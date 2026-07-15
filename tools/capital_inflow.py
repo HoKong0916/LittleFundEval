@@ -27,7 +27,7 @@ async def _match_sectors(user_sectors: list[str], available_names: list[str]) ->
     返回与 user_sectors 一一对应的匹配结果，匹配不到的为空字符串。
     """
     board_names = "\n".join(f"- {n}" for n in available_names)
-    system_prompt = SYSTEM_PROMPT_CAPITAL_INFLOW.format(board_names=board_names)
+    system_prompt = SYSTEM_PROMPT_CAPITAL_INFLOW.replace("{board_names}", board_names)
     user_text = "、".join(user_sectors)
 
     messages = [

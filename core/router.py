@@ -1,21 +1,8 @@
 import json
+from core.history_formatter import format_history_dialogue
 from llm_client import local_chat
 from prompts.router import SYSTEM_PROMPT_ROUTER
 from tools import tools_prompt_json
-
-def _flatten_history(history: list[dict]) -> str:
-    """把历史对话扁平化为纯文本摘要，避免 assistant role 干扰分类器。"""
-    if not history:
-        return ""
-    lines = []
-    for msg in history:
-        role = msg.get("role", "")
-        content = msg.get("content", "")[:200]  # 截断，防止太长
-        if role == "user":
-            lines.append(f"用户：{content}")
-        elif role == "assistant":
-            lines.append(f"助手：{content}")
-    return "\n".join(lines)
 
 
 async def classify_intent(user_message: list, history: list[dict] | None = None) -> dict:
@@ -26,7 +13,7 @@ async def classify_intent(user_message: list, history: list[dict] | None = None)
     user_question = user_message[-1]["content"] if user_message else ""
 
      # 历史扁平化为纯文本，不作为独立 message
-    history_text = _flatten_history(history) if history else ""
+    history_text = format_history_dialogue(history, truncate=200) if history else ""
 
     system_prompt = (
         SYSTEM_PROMPT_ROUTER
@@ -38,7 +25,7 @@ async def classify_intent(user_message: list, history: list[dict] | None = None)
     if history_text:
         system_prompt = system_prompt.replace(
             "{history_context}",
-            f"\n## 历史对话摘要（仅供判断上下文，你不是对话参与者）\n{history_text}\n"
+            f"（仅供判断上下文，你不是对话参与者）\n{history_text}\n"
         )
     else:
         system_prompt = system_prompt.replace("{history_context}", "")

@@ -58,7 +58,7 @@ async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict
     tags_text = "\n".join(f"- {t['title']}（ID: {t['id']}）" for t in tags)
     sort_text = "\n".join(f"- {label}（key: {key}）" for label, key in SORT_DICT.items())
 
-    system_prompt = SYSTEM_PROMPT_SELECT_FUND.format(tags_text=tags_text, sort_text=sort_text)
+    system_prompt = SYSTEM_PROMPT_SELECT_FUND.replace("{tags_text}", tags_text).replace("{sort_text}", sort_text)
 
     messages = [
         {"role": "system", "content": system_prompt},
