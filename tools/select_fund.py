@@ -30,21 +30,22 @@ SORT_DICT = {
 
 # ── 抓取板块标签 ──
 
-def _fetch_board_tags() -> list[dict[str, str]]:
+async def _fetch_board_tags() -> list[dict[str, str]]:
     """抓取板块标签列表，每项含 id（去掉前3字符）和 title。"""
-    resp = httpx.get(URL, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    resp.encoding = "utf-8"
+    async with httpx.AsyncClient(headers=HEADERS, timeout=15) as client:
+        resp = await client.get(URL)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    tags = []
-    for a in soup.select("#content_tp a[id^='tp_']"):
-        raw_id = a.get("id", "")
-        title = a.get("title", "")
-        if raw_id and title:
-            tags.append({"id": raw_id[3:], "title": title})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        tags = []
+        for a in soup.select("#content_tp a[id^='tp_']"):
+            raw_id = a.get("id", "")
+            title = a.get("title", "")
+            if raw_id and title:
+                tags.append({"id": raw_id[3:], "title": title})
 
-    return tags
+        return tags
 
 
 # ── LLM 匹配板块 + 时间段 ──
@@ -66,7 +67,11 @@ async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict
     ]
 
     response = await local_chat(messages, temperature=0.0)
-    return json.loads(response)
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        # 本地 LLM 偶发输出非 JSON → 返回默认值，不做板块筛选
+        return {"sector_id": "", "sector_title": "未知板块", "sort_key": "1y", "sort_label": "近1月"}
 
 
 # ── 主入口 ──
@@ -77,8 +82,12 @@ async def select_fund(user_query: str) -> str:
     示例:
         result = await select_fund("AI应用板块近1月前十收益")
     """
-    tags = _fetch_board_tags()
+    tags = await _fetch_board_tags()
     match = await _match_user_query(user_query, tags)
+
+    # LLM 匹配失败时 sector_id 为空，提前返回语义化报错
+    if not match.get("sector_id"):
+        return "错误: 未能识别您查询的板块，请尝试更具体的板块名称"
 
     requests_url = "https://fund.eastmoney.com/data/FundGuideapi.aspx"
     requests_payload = {

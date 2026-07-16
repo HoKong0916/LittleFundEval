@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 
@@ -19,6 +20,35 @@ def _format_flow(val: float) -> str:
     yi = val / 1e8
     sign = "+" if yi > 0 else "-"
     return f"{sign}{yi:.2f}亿"
+
+
+async def _fetch_period(client: httpx.AsyncClient, st: str) -> tuple[str, list[dict]] | None:
+    """抓取单个时间段（今日/近1周/近1月/近3月）的板块资金流向数据。
+
+    错误全吞并返回 None —— 四个时间段并发抓取，单个失败不影响其余。
+    """
+    url = "https://api.fund.eastmoney.com/ztjj/GetZTJJListNew"
+    params = {"tt": "0", "dt": "zjlr", "st": st}
+
+    try:
+        raw = (await client.get(url=url, params=params)).text
+    except Exception:
+        return None
+
+    # jQuery callback 解包: jQuery123({...}) → {...}
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return None
+    try:
+        payload = json.loads(m.group())
+    except json.JSONDecodeError:
+        return None
+
+    sector_list = payload.get("Data") or []
+    return st, [
+        {"名称": s["INDEXNAME"], "代码": s["INDEXCODE"], "流量": s[st]}
+        for s in sector_list
+    ]
 
 
 async def _match_sectors(user_sectors: list[str], available_names: list[str]) -> list[str]:
@@ -64,30 +94,19 @@ async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
         },
         timeout=30,
     ) as client:
-        for st in ("FLOW", "FLOW_W", "FLOW_M", "FLOW_Q"):
-            url = "https://api.fund.eastmoney.com/ztjj/GetZTJJListNew"
-            params = {"tt": "0", "dt": "zjlr", "st": st}
 
-            try:
-                raw = (await client.get(url=url, params=params)).text
-            except Exception:
-                continue
-
-            # jQuery callback 解包: jQuery123({...}) → {...}
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not m:
-                continue
-            try:
-                payload = json.loads(m.group())
-            except json.JSONDecodeError:
-                continue
-
-            sector_list = payload.get("Data") or []
-            # API 已按流入金额降序排列（正值在前，负值在后）
-            period_data[st] = [
-                {"名称": s["INDEXNAME"], "代码": s["INDEXCODE"], "流量": s[st]}
-                for s in sector_list
-            ]
+        # 四个时间段并发抓取，return_exceptions=True 防止单段异常取消其余请求
+        results = await asyncio.gather(
+            _fetch_period(client, "FLOW"),
+            _fetch_period(client, "FLOW_W"),
+            _fetch_period(client, "FLOW_M"),
+            _fetch_period(client, "FLOW_Q"),
+            return_exceptions=True,
+        )
+        for result in results:
+            if result is not None:
+                st, data = result
+                period_data[st] = data
 
     if not period_data:
         return "错误: 未获取到任何板块资金流向数据"

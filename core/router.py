@@ -40,7 +40,14 @@ async def classify_intent(
     messages = [{"role": "system", "content": system_prompt}]
 
     response = await local_chat(messages=messages)
-    result = json.loads(response)
+    try:
+        result = json.loads(response)
+    except json.JSONDecodeError:
+        # 本地 LLM 偶发输出非 JSON → 降级为直接回答，不做工具调用
+        # 比抛出异常更安全：用户至少能得到一个基于 LLM 知识的回复
+        await trace.log(session_id, step=0, event="router.parse_error",
+                        input={"raw_response": response[:500]})
+        return {"category": "DirectAnswer", "tools_needed": [], "reasoning": "JSON解析失败，降级为直接回答"}
 
     category = result["category"]
     tools_needed = result.get("tools_needed", [])

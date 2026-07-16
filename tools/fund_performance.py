@@ -63,14 +63,6 @@ async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient
     risk_desc = next((t["name"] for t in tags if t.get("category") == "9"), "")
     result["基金类型"] = f"{type_desc} | {risk_desc}" if type_desc and risk_desc else (type_desc or risk_desc or "")
 
-    def _pct(val):
-        if val is None:
-            return None
-        try:
-            return f"{float(val):+.2f}%"
-        except (ValueError, TypeError):
-            return None
-
     # ── 收益状况 ──
     result["日涨跌"] = _pct(derived.get("nav_grtd"))
     result["近1月收益"] = _pct(derived.get("nav_grl1m"))
@@ -87,6 +79,16 @@ async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient
     result["最新净值"] = derived.get("unit_nav")
     result["净值日期"] = derived.get("end_date")
     result["基金规模"] = data_block.get("totshare")
+
+
+def _pct(val):
+    """数值 → +x.xx% 格式字符串。"""
+    if val is None:
+        return None
+    try:
+        return f"{float(val):+.2f}%"
+    except (ValueError, TypeError):
+        return None
 
 
 def _ts_to_date(ts) -> str:
@@ -118,6 +120,17 @@ async def _fetch_fundgz(result: dict, fund_code: str, client: httpx.AsyncClient)
     result["估算涨幅"] = f"{float(gszzl):+.2f}%" if gszzl else None
 
 
+def _level(v: float) -> str:
+    """风险指标 → 弱/中/强 + 同类排名百分比。"""
+    if v < 30:
+        label = "弱"
+    elif v < 60:
+        label = "中"
+    else:
+        label = "强"
+    return f"{label}(优于{v:.0f}%同类)"
+
+
 def _fetch_risk(result: dict, fund_code: str) -> None:
     """通过 akshare 获取近1年的风险指标。"""
     try:
@@ -129,15 +142,6 @@ def _fetch_risk(result: dict, fund_code: str) -> None:
     if row.empty:
         return
     r = row.iloc[0]
-
-    def _level(v: float) -> str:
-        if v < 30:
-            label = "弱"
-        elif v < 60:
-            label = "中"
-        else:
-            label = "强"
-        return f"{label}(优于{v:.0f}%同类)"
 
     try:
         result["较同类风险收益比"] = _level(float(r.iloc[1]))
