@@ -53,6 +53,7 @@ async def cloud_chat(
     stream = await _deepseek_client.chat.completions.create(**kwargs)
 
     tool_buf: dict[int, dict] = {}
+    usage: dict | None = None
     try:
         async for chunk in stream:
             delta = chunk.choices[0].delta
@@ -70,6 +71,19 @@ async def cloud_chat(
                     if tc.function and tc.function.arguments:
                         tool_buf[tc.index]["args"] += tc.function.arguments
 
+            # DeepSeek 在 streaming 模式下，usage 信息出现在最后一个 chunk
+            # 将其附加到 done 事件中，供上层 trace 记录 token 消耗
+            if chunk.usage:
+                usage = {
+                    "prompt_tokens": chunk.usage.prompt_tokens,
+                    "total_tokens": chunk.usage.total_tokens,
+                }
+
+        # 构造 done 事件，统一携带 finish_reason + usage
+        done = {"type": "done"}
+        if usage:
+            done["usage"] = usage
+
         if tool_buf:
             calls = [tool_buf[i] for i in sorted(tool_buf)]
             yield {
@@ -79,9 +93,11 @@ async def cloud_chat(
                     for b in calls
                 ],
             }
-            yield {"type": "done", "finish_reason": "tool_calls"}
+            done["finish_reason"] = "tool_calls"
         else:
-            yield {"type": "done", "finish_reason": "stop"}
+            done["finish_reason"] = "stop"
+
+        yield done
 
     except asyncio.CancelledError:
         yield {"type": "done", "finish_reason": "cancelled"}

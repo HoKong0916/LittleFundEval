@@ -1,8 +1,10 @@
 import asyncio
 import json
 import re
+import time
 
 from core.dispatch import dispatch_tool
+from core.trace import TraceLogger
 from core.history_formatter import format_history_dialogue, format_history_assistant_only
 from llm_client import cloud_chat, local_chat
 from prompts.rewoo import SYSTEM_PROMPT_REWOO_EXTRACT, SYSTEM_PROMPT_REWOO_SYNTHESIS
@@ -22,30 +24,39 @@ async def _extract_names(user_question: str, history: list[dict], has_context: b
         {"role": "user", "content": user_question},
     ]
 
-    response = local_chat(messages, temperature=0.0)
+    response = await local_chat(messages, temperature=0.0)
     try:
         data = json.loads(response)
         return data.get("fund_names", [])
     except json.JSONDecodeError:
-        print(f"⚠️ 基金名称提取失败: {response[:200]}")
         return []
 
 
-async def _resolve_codes(user_question: str, tools_needed: list, history: list[dict], has_context: bool) -> list[str]:
-    """解析基金代码：search_fund 在列表中则 LLM 提取名称后逐个搜索，否则正则提取。"""
+async def _resolve_codes(
+    user_question: str, tools_needed: list, history: list[dict],
+    has_context: bool, trace: TraceLogger, session_id: str,
+) -> list[str]:
+    """解析基金代码：search_fund 在列表中则 LLM 提取名称后逐个搜索；同时始终从问题中正则提取代码作为兜底。"""
     codes: list[str] = []
 
     if "search_fund" in tools_needed:
         fund_names = await _extract_names(user_question, history, has_context)
+
+        await trace.log(session_id, step=0, event="rewoo.phase1.done",
+                        input={"count": len(fund_names), "names": fund_names})
+
         for name in fund_names:
-            print(f"🔍 搜索基金: {name}")
+            await trace.log(session_id, step=0, event="rewoo.phase2.search",
+                            input={"name": name})
+
             result = await dispatch_tool("search_fund", {"keyword": name})
-            print(f"📋 {result}")
             m = _CODE_RE.search(result)
             if m:
                 codes.append(m.group(0))
             else:
-                print(f"⚠️ 未找到代码: {name}")
+                await trace.log(session_id, step=0, event="rewoo.tool_error",
+                                output=f"未找到代码: {name}",
+                                input={"tool_name": "search_fund", "name": name})
 
     # 正则兜底：问题中可能直接给了代码
     direct_codes = _CODE_RE.findall(user_question)
@@ -54,20 +65,35 @@ async def _resolve_codes(user_question: str, tools_needed: list, history: list[d
     return list(dict.fromkeys(codes))  # 去重保序
 
 
-async def _call_tool(tool_name: str, params: dict) -> str:
-    """调用单个工具并打印进度。"""
-    params_str = ", ".join(f'{k}="{v}"' for k, v in params.items())
-    print(f"⏳ {tool_name}({params_str})")
+async def _call_tool(tool_name: str, params: dict, trace: TraceLogger, session_id: str) -> str:
+    """调用单个工具，记录 trace。"""
+    t0 = time.perf_counter()
     result = await dispatch_tool(tool_name, params)
-    print(f"📋 {result}")
+    latency = (time.perf_counter() - t0) * 1000
+
+    await trace.log(session_id, step=0, event="rewoo.tool_call",
+                    input={"tool_name": tool_name, "params": params},
+                    output=result, latency_ms=latency)
+
     return result
 
 
-async def _execute_data_tools(tools_needed: list, fund_codes: list[str], user_question: str) -> dict:
-    """并发执行数据工具：per-fund 工具按代码展开，其余工具直接调用。"""
-    tasks: list[tuple[str, dict]] = []  # [(tool_name, params)]
+async def _execute_data_tools(
+    tools_needed: list, fund_codes: list[str], user_question: str,
+    trace: TraceLogger, session_id: str,
+) -> dict:
+    """并发执行数据工具：per-fund 工具按代码展开，其余工具直接调用。
 
-    # per-fund 工具：每只基金 × 每个工具
+    工具分类：
+    - per-fund 工具（PER_FUND_TOOLS）：按 fund_code 笛卡尔展开，每只基金 × 每个工具
+    - 独立工具（如 capital_inflow_in_sectors）：不依赖 fund_code，直接调用
+    - search_fund 已在阶段1使用过，阶段2跳过
+
+    asyncio.gather(return_exceptions=True) 确保单个工具失败不会阻塞其他工具。
+    """
+    tasks: list[tuple[str, dict]] = []
+
+    # per-fund 工具按基金代码展开：N 只基金 × M 个工具 = N*M 次调用
     for code in fund_codes:
         for tool in tools_needed:
             if tool in _PER_FUND_TOOLS:
@@ -82,7 +108,8 @@ async def _execute_data_tools(tools_needed: list, fund_codes: list[str], user_qu
     if not tasks:
         return {}
 
-    coros = [_call_tool(name, params) for name, params in tasks]
+    # 并发执行所有任务，单个工具报错不阻塞其他工具
+    coros = [_call_tool(name, params, trace, session_id) for name, params in tasks]
     results = await asyncio.gather(*coros, return_exceptions=True)
 
     observations: dict[str, str] = {}
@@ -105,8 +132,11 @@ def _format_observations(observations: dict) -> str:
     return "\n".join(lines)
 
 
-async def _synthesize(user_message: list, observations: dict, history: list[dict], has_context: bool) -> str:
-    """用 cloud_chat 流式生成最终回答。"""
+async def _synthesize(
+    user_message: list, observations: dict, history: list[dict],
+    has_context: bool, trace: TraceLogger, session_id: str,
+) -> str:
+    """用 cloud_chat 流式生成最终回答（输出直接打印，这是用户可见的回答）。"""
     system_prompt = (
         SYSTEM_PROMPT_REWOO_SYNTHESIS
         .replace("{observations}", _format_observations(observations))
@@ -116,8 +146,10 @@ async def _synthesize(user_message: list, observations: dict, history: list[dict
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(user_message)
 
+    t0 = time.perf_counter()
     print()
     buffer = ""
+    llm_usage = None
     gen = cloud_chat(messages)
     try:
         async for chunk in gen:
@@ -125,29 +157,56 @@ async def _synthesize(user_message: list, observations: dict, history: list[dict
                 buffer += chunk["content"]
                 print(chunk["content"], end="", flush=True)
             elif chunk["type"] == "done":
+                llm_usage = chunk.get("usage")
                 break
     finally:
         await gen.aclose()
 
+    latency = (time.perf_counter() - t0) * 1000
     print()
+
+    await trace.log(session_id, step=0, event="rewoo.phase3.done",
+                    latency_ms=latency, tokens=llm_usage,
+                    output=buffer[:500])
+
     return buffer
 
 
-async def run_rewoo_loop(user_message: list, tools_needed: list, history: list[dict], has_context: bool) -> str:
-    """REWOO 执行器：LLM提取基金名 → 解析代码 → 并发拉数据 → 综合回答。"""
+async def run_rewoo_loop(
+    user_message: list, tools_needed: list, history: list[dict],
+    has_context: bool, trace: TraceLogger, session_id: str,
+) -> str:
+    """REWOO 执行器：LLM提取基金名 → 解析代码 → 并发拉数据 → 综合回答。
+
+    Thought/Action/Observation 原文仅写入 trace JSON 日志，
+    终端只展示人类可读的进度提示（DEBUG_TRACE=1 时）。
+    """
     user_question = user_message[-1]["content"] if user_message else ""
 
-    print(f"\n{'─' * 50}")
-    print("🧩 阶段1：解析基金代码")
+    # ── REWOO 三阶段流水线 ─────────────────────────────────────
+    # 阶段1：LLM 提取基金名 → search_fund 搜索代码 → 正则兜底
+    # 阶段2：per-fund 工具按代码展开 + 独立工具，全部并发执行
+    # 阶段3：将所有 Observation 注入 system prompt，流式生成最终回答
 
-    fund_codes = await _resolve_codes(user_question, tools_needed, history, has_context)
+    # ── 阶段1：解析基金名称与代码 ──
+    await trace.log(session_id, step=0, event="rewoo.phase1.extract",
+                    input={"question": user_question[:200]})
 
-    print(f"\n{'─' * 50}")
-    print("🧩 阶段2：并发获取数据")
+    fund_codes = await _resolve_codes(user_question, tools_needed, history,
+                                      has_context, trace, session_id)
 
-    observations = await _execute_data_tools(tools_needed, fund_codes, user_question)
+    # ── 阶段2：并发获取所有数据（单次 asyncio.gather 全部发出）───
+    await trace.log(session_id, step=0, event="rewoo.phase2.fetch",
+                    input={"tool_count": len(tools_needed), "fund_count": len(fund_codes)})
 
-    print(f"\n{'─' * 50}")
-    print("🧩 阶段3：综合分析")
+    observations = await _execute_data_tools(tools_needed, fund_codes, user_question,
+                                             trace, session_id)
 
-    return await _synthesize(user_message, observations, history, has_context)
+    await trace.log(session_id, step=0, event="rewoo.phase2.done",
+                    input={"count": len(observations), "keys": list(observations.keys())})
+
+    # ── 阶段3：将所有数据注入 system prompt，流式生成综合分析 ──
+    await trace.log(session_id, step=0, event="rewoo.phase3.start")
+
+    return await _synthesize(user_message, observations, history, has_context,
+                             trace, session_id)

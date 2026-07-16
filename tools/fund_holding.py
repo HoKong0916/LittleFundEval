@@ -13,7 +13,8 @@ async def get_fund_holdings(fund_code: str) -> str:
         headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
             "Host": "fund.eastmoney.com",
-        }
+        },
+        timeout=30,
     ) as client:
         raw = await client.get(url=requests_url)
 

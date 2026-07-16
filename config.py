@@ -53,7 +53,12 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
-# ── Redis（会话短期记忆）────────────────────────────────────
+# ── Redis（会话短期记忆 + trace 日志）────────────────────────
 REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+
+# ── 调试 trace ──────────────────────────────────────────────
+# 设为 "1" 时终端实时展示人类可读的 ReAct/REWOO 进度提示
+# trace 数据（含 Thought/Action/Observation 原文）始终写入 Redis
+DEBUG_TRACE = os.getenv("DEBUG_TRACE", "1") == "1"

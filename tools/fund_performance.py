@@ -46,7 +46,7 @@ async def get_fund_performance(fund_code: str) -> str:
 
 async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient) -> None:
     """从丹橘API提取收益、排名、规模、基本信息。"""
-    r = await client.get(f"https://danjuanfunds.com/djapi/fund/{fund_code}", timeout=10)
+    r = await client.get(f"https://danjuanfunds.com/djapi/fund/{fund_code}", timeout=30)
     r.raise_for_status()
     data = r.json()
     data_block = data.get("data") or {}
@@ -102,7 +102,7 @@ def _ts_to_date(ts) -> str:
 
 async def _fetch_fundgz(result: dict, fund_code: str, client: httpx.AsyncClient) -> None:
     """从天天基金 fundgz 接口获取实时估算净值与涨幅。"""
-    r = await client.get(f"https://fundgz.1234567.com.cn/js/{fund_code}.js", timeout=10)
+    r = await client.get(f"https://fundgz.1234567.com.cn/js/{fund_code}.js", timeout=30)
     r.raise_for_status()
     match = re.search(r"jsonpgz\((\{.*\})\)", r.text)
     if not match:

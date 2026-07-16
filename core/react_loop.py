@@ -1,10 +1,12 @@
 import json
 import re
+import time
 
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
 from tools import tools_prompt_json
 from core.dispatch import dispatch_tool
+from core.trace import TraceLogger
 
 
 MAX_STEPS = 5
@@ -62,7 +64,19 @@ def _try_parse_action(buffer: str) -> dict | None:
     return {"thought": thought, "tool": tool_name, "params": params}
 
 
-async def run_react_loop(user_message: list, tools_needed: list, history: list[dict], has_context: bool) -> str:
+async def run_react_loop(
+    user_message: list,
+    tools_needed: list,
+    history: list[dict],
+    has_context: bool,
+    trace: TraceLogger,
+    session_id: str,
+) -> str:
+    """ReAct 执行器：Thought → Action → Observation 循环。
+
+    Thought/Action/Observation 原文仅写入 trace JSON 日志，
+    终端只展示人类可读的进度提示（DEBUG_TRACE=1 时）。
+    """
     user_question = user_message[-1]["content"] if user_message else ""
     system_prompt = (
         SYSTEM_PROMPT_REACT
@@ -81,32 +95,39 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
 
     messages = [{"role": "system", "content": system_prompt}]
     if has_context:
-        messages.extend(history)  # 完整传入，不截断
+        messages.extend(history)
 
-
-
+    final_answer = ""
     for step in range(1, MAX_STEPS + 1):
-        print(f"\n{'─' * 50}")
-        print(f"📍 步骤 {step}/{MAX_STEPS} ", end="", flush=True)
+        t_step = time.perf_counter()
+
+        await trace.log(session_id, step=step, event="react.step.start",
+                        input={"step": step, "max_steps": MAX_STEPS})
 
         buffer = ""
         parsed = None
+        llm_usage = None
 
+        # ── 流式 LLM 调用 ──────────────────────────────────────
+        # 两种提前终止路径：
+        #   1. 增量检测到 Action 闭括号 → 立即截断流，进入工具调用
+        #   2. 模型返回原生 tool_calls → 兜底路径，无需解析格式
+        # 正常结束（done）→ 进入兜底解析（Final Answer 场景）
         gen = cloud_chat(messages)
         try:
             async for chunk in gen:
                 if chunk["type"] == "text":
                     buffer += chunk["content"]
-                    # 流式实时打印 —— 用户看到模型逐 token 输出 Thought/Action/Final Answer
-                    print(chunk["content"], end="", flush=True)
 
-                    # 增量检测：Action 闭括号一到齐，立即截断流式接收，准备 dispatch 工具
+                    # 增量检测：Action 闭括号一到齐，立即截断流式接收
+                    # 注意：只检测 Action，不检测 Final Answer ——
+                    #   Final Answer 需要流式输出完整内容给用户看，不应提前截断
                     parsed = _try_parse_action(buffer)
                     if parsed:
                         break
 
                 elif chunk["type"] == "tool_calls":
-                    # 模型返回原生 function call（兜底路径）
+                    # 原生 function call 兜底：模型未按 ReAct 格式输出但发了 tool_call
                     calls = chunk["calls"]
                     if calls:
                         parsed = {
@@ -117,25 +138,35 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
                     break
 
                 elif chunk["type"] == "done":
+                    llm_usage = chunk.get("usage")
                     break
         finally:
             await gen.aclose()
 
-        print()  # 流式输出后换行
+        llm_latency = (time.perf_counter() - t_step) * 1000
 
-        # 兜底：流正常结束但未通过增量检测捕获到（如 Final Answer 场景）
+        # 兜底：流正常结束（非截断），用完整 buffer 做一次全量解析
+        # 处理场景：Final Answer、格式不规范但包含 Action 的输出
         if parsed is None:
             parsed = parse_step(buffer)
 
+        # 记录 LLM 调用 trace（buffer 中含完整的 Thought/Action/Final Answer 原文）
+        await trace.log(session_id, step=step, event="react.llm_call",
+                        input={"buffer": buffer},
+                        output=parsed, latency_ms=llm_latency, tokens=llm_usage)
+
         if "parse_error" in parsed:
-            print("❌ 模型输出无法解析，终止")
+            await trace.log(session_id, step=step, event="react.parse_error",
+                            input={"buffer": buffer})
             final_answer = "[错误] 模型输出无法解析"
             break
 
         if "final_answer" in parsed:
-            # 第一步就想直接回答 + 路由指定了工具 + 还没调过工具 → 拒绝，要求先调工具
+            # 拦截：路由明确需要工具但第 1 步就直接回答 → 注入纠正提示
+            # 防止模型跳过数据获取直接基于训练数据编造答案
             if step == 1 and tools_needed:
-                print("🛡️ 拦截：第1步试图跳过工具调用，注入纠正提示")
+                await trace.log(session_id, step=step, event="react.skip_guard",
+                                input=parsed)
                 messages.append({"role": "assistant", "content": buffer})
                 messages.append({"role": "user", "content":
                     "你不能直接回答。请先调用工具获取数据——"
@@ -143,24 +174,35 @@ async def run_react_loop(user_message: list, tools_needed: list, history: list[d
                 })
                 continue
             final_answer = parsed["final_answer"]
+            # Final Answer 是用户可见的最终输出，打印出来
+            print(final_answer)
+            await trace.log(session_id, step=step, event="react.final_answer",
+                            output=final_answer)
             break
 
-        # 工具调用
+        # ── 工具调用 ──
         tool_name = parsed["tool"]
-        params_str = ", ".join(f'{k}="{v}"' for k, v in parsed["params"].items())
-        print(f"⏳ {tool_name}({params_str})")
+        tool_t0 = time.perf_counter()
+
+        await trace.log(session_id, step=step, event="react.tool_call",
+                        input={"tool_name": tool_name, "params": parsed["params"]})
 
         observation = await dispatch_tool(tool_name, parsed["params"])
-        print(f"📋 {observation}")
+        tool_latency = (time.perf_counter() - tool_t0) * 1000
+
+        await trace.log(session_id, step=step, event="react.tool_result",
+                        input={"tool_name": tool_name},
+                        output=observation, latency_ms=tool_latency)
 
         messages.append({"role": "assistant", "content": buffer})
         messages.append({"role": "user", "content": f"Observation: {observation}"})
 
     else:
-        # 步数耗尽但未产出 Final Answer → 强制要求模型基于已有信息总结
+        # 步数耗尽但未产出 Final Answer → 强制要求模型基于已有 Observation 总结
+        # 追加一条 user 消息作为提示，再做一次非流式 LLM 调用
         if messages:
-            print(f"\n{'─' * 50}")
-            print("⚠️ 已达最大推理步数，强制生成总结...\n")
+            await trace.log(session_id, step=MAX_STEPS, event="react.forced_summary")
+
             messages.append({
                 "role": "user",
                 "content": (

@@ -13,7 +13,7 @@ async def search_fund(keyword: str) -> str:
         "_": str(timestamp_ms),
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         raw = (await client.get(url=requests_url, params=requests_payload)).text
     # 步骤1：去掉首尾的单引号
     raw = raw.strip("'")

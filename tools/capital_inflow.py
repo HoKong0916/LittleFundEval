@@ -61,7 +61,8 @@ async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
         headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://fund.eastmoney.com/",
-        }
+        },
+        timeout=30,
     ) as client:
         for st in ("FLOW", "FLOW_W", "FLOW_M", "FLOW_Q"):
             url = "https://api.fund.eastmoney.com/ztjj/GetZTJJListNew"
