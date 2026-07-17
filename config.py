@@ -41,6 +41,11 @@ LLAMA_THINKING = os.getenv("LLAMA_THINKING", "off")
 LLAMA_SPEC_TYPE = os.getenv("LLAMA_SPEC_TYPE", "draft-mtp")
 LLAMA_SPEC_DRAFT_N_MAX = int(os.getenv("LLAMA_SPEC_DRAFT_N_MAX", "2"))
 
+# ── 降级策略 ────────────────────────────────────────────────
+# llama-server 不可用时是否自动切换 DeepSeek 处理 local_chat 调用
+# 设为 "0" 禁止降级（连不上本地 LLM 直接报错）
+LLM_FALLBACK_TO_CLOUD = os.getenv("LLM_FALLBACK_TO_CLOUD", "1") == "1"
+
 # ── llama.cpp 服务连接 ──────────────────────────────────────
 # llama.cpp server 的 OpenAI 兼容 API 地址
 # 启动 llama-server 后它会暴露一个与 OpenAI 格式兼容的 HTTP 服务
@@ -52,6 +57,21 @@ LLAMA_CPP_BASE_URL = os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:9856/v1")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+
+# ── 对话记忆 ────────────────────────────────────────────────
+import tiktoken
+
+# tiktoken 编码器：o200k_base 与 DeepSeek tokenizer 高度接近
+_TOKEN_ENC = tiktoken.get_encoding("o200k_base")
+
+# 单会话 token 超此阈值触发摘要化
+MAX_TOKEN_THRESHOLD = 10000
+
+
+def count_tokens(text: str) -> int:
+    """使用 tiktoken (o200k_base) 精确计算 token 数。"""
+    return len(_TOKEN_ENC.encode(text))
+
 
 # ── Redis（会话短期记忆 + trace 日志）────────────────────────
 REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")

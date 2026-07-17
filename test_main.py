@@ -12,6 +12,7 @@ from core.topic import is_same_topic
 from core.direct_answer import run_direct_answer
 from core.memory import MemoryManager
 from core.trace import TraceLogger
+from config import count_tokens, MAX_TOKEN_THRESHOLD
 from core.summarizer import summarize_session
 
 _SESSION_FILE = os.path.join(os.path.dirname(__file__), ".session_id")
@@ -80,7 +81,11 @@ async def main():
         if final_answer:
             await memory.append_message(session_id, {"role": "user", "content": user_message})
             await memory.append_message(session_id, {"role": "assistant", "content": final_answer})
-            await memory.set_summary_flag(session_id)
+            
+            current_message = await memory.load_messages(session_id)
+            current_total = sum(count_tokens(m["content"]) for m in current_message)
+            if current_total > MAX_TOKEN_THRESHOLD:
+                await memory.set_summary_flag(session_id)
         else:
             print("⚠️ 未获得有效回复，不存入历史")
 

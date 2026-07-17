@@ -7,3 +7,4 @@ core/__pycache__
 prompts/__pycache__
 appendonly.aof
 .session_id
+llama_server.pid

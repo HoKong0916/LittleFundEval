@@ -1,6 +1,7 @@
 import time
 
 from core.history_formatter import format_history_dialogue
+from core.trace import TraceLogger
 from llm_client import cloud_chat
 from prompts.direct_answer import SYSTEM_PROMPT_DIRECT_ANSWER
 
@@ -9,7 +10,7 @@ async def run_direct_answer(
     user_message: list,
     history: list[dict],
     has_context: bool,
-    trace,          # TraceLogger
+    trace: TraceLogger,
     session_id: str,
 ) -> str:
     """直接回答模式：不调用工具，直接用 LLM 知识作答（有上下文时综合历史数据）。"""

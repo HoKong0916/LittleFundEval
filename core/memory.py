@@ -17,7 +17,7 @@ import redis.asyncio as aioredis
 from config import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
 
 
-MAX_MESSAGES = 10          # 保留最近 10 条消息（5 轮对话）
+MAX_MESSAGES = 50          # 保留最近 50 条消息（安全帽，日常由摘要系统管控 token）
 TTL_SECONDS = 1800         # 30 分钟无操作过期
 RETRY_MAX = 3              # 连接重试次数
 RETRY_DELAY = 1.0          # 重试间隔（秒）

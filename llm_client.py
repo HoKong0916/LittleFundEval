@@ -1,6 +1,8 @@
-import json, asyncio
+import json, asyncio, logging
 from openai import AsyncOpenAI
-from config import LLAMA_CPP_BASE_URL, DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY, DEEPSEEK_MODEL
+from config import LLAMA_CPP_BASE_URL, DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, LLM_FALLBACK_TO_CLOUD
+
+logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(base_url=LLAMA_CPP_BASE_URL, api_key="not-needed")
 _deepseek_client = AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=DEEPSEEK_API_KEY)
@@ -16,14 +18,26 @@ async def _get_model_name() -> str:
 
 
 async def local_chat(messages: list[dict], temperature: float = 0.0) -> str:
-    """本地 llama.cpp — 轻量分类。"""
-    from llama_launcher import start_server
-    start_server()
-    response = await _client.chat.completions.create(
-        model=await _get_model_name(),
-        messages=messages,
-        temperature=temperature,
-    )
+    """本地 llama.cpp — 轻量分类。
+
+    llama-server 需提前手动启动（与 Redis 同理，应用不负责进程管理）。
+    连不上时若 LLM_FALLBACK_TO_CLOUD=1 则自动降级到 DeepSeek。
+    """
+    try:
+        response = await _client.chat.completions.create(
+            model=await _get_model_name(),
+            messages=messages,
+            temperature=temperature,
+        )
+    except Exception:
+        if not LLM_FALLBACK_TO_CLOUD:
+            raise
+        logger.warning("llama-server 不可用，降级到 DeepSeek")
+        response = await _deepseek_client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=messages,
+            temperature=temperature,
+        )
     return response.choices[0].message.content
 
 
