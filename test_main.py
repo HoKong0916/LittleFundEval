@@ -38,7 +38,7 @@ def _load_session_id() -> str:
 async def main():
     """测试入口：trace → 摘要 → 历史 → 话题检测 → 路由 → 执行 → 记忆存储。"""
     session_id = _load_session_id()
-    user_message = "今日什么板块表现最佳？"
+    user_message = "给出这六个基金实时预估涨幅，分别是永赢先锋半导体混合C、国联安优选行业混合、大摩数字经济混合C、德邦鑫星价值灵活配置混合C、东方人工智能主题混合C、东方阿尔法科技智选混合C？"
 
     async with MemoryManager() as memory, TraceLogger() as trace:
         # ── N+1 轮开始：检查上一轮是否留下摘要标记 ──
@@ -59,7 +59,7 @@ async def main():
             trace=trace, session_id=session_id,
         )
 
-        print(f"\n🚀 执行 {decision['category']} 路径\n")
+        # print(f"\n🚀 执行 {decision['category']} 路径\n")
 
         # ── 执行 ──
         msg_list = [{"role": "user", "content": user_message}]
@@ -87,6 +87,6 @@ async def main():
             if current_total > MAX_TOKEN_THRESHOLD:
                 await memory.set_summary_flag(session_id)
         else:
-            print("⚠️ 未获得有效回复，不存入历史")
+            await trace.log(session_id, step=0, event="session.no_answer")
 
 asyncio.run(main())

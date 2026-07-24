@@ -23,6 +23,7 @@ RETRY_DELAY = 1.0
 # ── 事件 → 人类可读进度提示 ────────────────────────────────────
 # 模板中用 {key} 占位，由 _print_progress 的 kwargs 填充。
 _PROGRESS_MESSAGES: dict[str, str] = {
+    # Router
     "router.classify":       "🧭 分析用户意图 → {category}",
     "router.direct_answer":  "💬 无需工具，直接回答",
 
@@ -45,6 +46,9 @@ _PROGRESS_MESSAGES: dict[str, str] = {
     "rewoo.phase3.start":    "🧩 阶段3: 综合分析中…",
     "rewoo.phase3.done":     "✅ 综合分析完成 ({latency_ms}ms, {tokens} tokens)",
     "rewoo.tool_error":      "⚠️ 未找到基金代码: {name}",
+
+    # 会话
+    "session.no_answer":    "⚠️ 未获得有效回复，不存入历史",
 }
 
 

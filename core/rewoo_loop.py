@@ -11,7 +11,7 @@ from prompts.rewoo import SYSTEM_PROMPT_REWOO_EXTRACT, SYSTEM_PROMPT_REWOO_SYNTH
 
 
 _CODE_RE = re.compile(r"\b\d{6}\b")
-_PER_FUND_TOOLS = {"get_fund_performance", "get_fund_holdings"}
+_PER_FUND_TOOLS = {"get_fund_performance", "get_fund_holdings", "estimate_fund_nav"}
 
 
 async def _extract_names(user_question: str, history: list[dict], has_context: bool) -> list[str]:
@@ -50,6 +50,11 @@ async def _resolve_codes(
                             input={"name": name})
 
             result = await dispatch_tool("search_fund", {"keyword": name})
+
+            await trace.log(session_id, step=0, event="rewoo.tool_call",
+                            input={"tool_name": "search_fund", "keyword": name},
+                            output=result[:300])
+
             m = _CODE_RE.search(result)
             if m:
                 codes.append(m.group(0))
