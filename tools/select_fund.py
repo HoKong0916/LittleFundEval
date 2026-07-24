@@ -4,6 +4,7 @@
 """
 
 import json
+import random
 import httpx
 from bs4 import BeautifulSoup
 from llm_client import local_chat
@@ -116,7 +117,7 @@ async def select_fund(user_query: str) -> str:
         "pn": "10",
         "zf": "diy",
         "sh": "list",
-        "rnd": "0.8552703512900851",
+        "rnd": str(random.random()),
     }
 
     async with httpx.AsyncClient(headers=HEADERS, timeout=30) as client:

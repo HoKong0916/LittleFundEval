@@ -1,0 +1,9 @@
+openai
+httpx
+redis
+akshare
+beautifulsoup4
+tiktoken
+fastapi
+uvicorn
+pandas
