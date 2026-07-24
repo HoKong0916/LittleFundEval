@@ -120,7 +120,4 @@ SYSTEM_PROMPT_TOPIC = """
 
 **对话历史**（完整轮次，按时间从旧到新，每行标注"用户"/"助手"）
 {history_context}
-
-**当前问题**
-{user_question}
 """

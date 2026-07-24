@@ -4,14 +4,14 @@ import os
 # 本地 GGUF 模型文件路径
 LLAMA_MODEL_PATH = os.getenv(
     "LLAMA_MODEL_PATH",
-    "D:\\QwenModels\\Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "./models/Qwen3.5-9B-UD-Q4_K_XL.gguf",
 )
 
 # ── llama.cpp 进程管理 ──────────────────────────────────────
 # llama-server 可执行文件路径
 LLAMA_SERVER_PATH = os.getenv(
     "LLAMA_SERVER_PATH",
-    "D:\\llamacpp\\llama-server.exe",
+    "./llamacpp/llama-server.exe",
 )
 
 # 监听地址与端口

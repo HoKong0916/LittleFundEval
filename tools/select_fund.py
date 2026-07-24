@@ -1,5 +1,6 @@
-"""
-从天天基金"基金导购"页面，根据用户自然语言查询，筛选指定板块 + 时间段下收益前十的基金。
+"""基金导购工具 —— 根据自然语言查询，从天天基金导购页筛选指定板块+时间段下收益前十的基金。
+
+流程：抓取板块标签 → LLM 匹配板块+时间段 → 请求基金排名 API → 格式化输出。
 """
 
 import json
@@ -7,6 +8,11 @@ import httpx
 from bs4 import BeautifulSoup
 from llm_client import local_chat
 from prompts.select_fund import SYSTEM_PROMPT_SELECT_FUND
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 常量
+# ═══════════════════════════════════════════════════════════════════
 
 URL = "https://fund.eastmoney.com/daogou/#dt4;ft;rs;sd;ed;pr;cp;rt;tp;rk;se;nx;sc1n;stdesc;pi1;pn20;zfdiy;shlist"
 
@@ -28,10 +34,16 @@ SORT_DICT = {
 }
 
 
-# ── 抓取板块标签 ──
+# ═══════════════════════════════════════════════════════════════════
+# 板块标签抓取
+# ═══════════════════════════════════════════════════════════════════
+
 
 async def _fetch_board_tags() -> list[dict[str, str]]:
-    """抓取板块标签列表，每项含 id（去掉前3字符）和 title。"""
+    """抓取导购页的板块标签列表。
+
+    返回 [{"id": "BK123456", "title": "人工智能"}, ...]。
+    """
     async with httpx.AsyncClient(headers=HEADERS, timeout=15) as client:
         resp = await client.get(URL)
         resp.raise_for_status()
@@ -48,18 +60,23 @@ async def _fetch_board_tags() -> list[dict[str, str]]:
         return tags
 
 
-# ── LLM 匹配板块 + 时间段 ──
+# ═══════════════════════════════════════════════════════════════════
+# LLM 匹配板块 + 时间段
+# ═══════════════════════════════════════════════════════════════════
+
 
 async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict:
     """用本地 LLM 将用户自然语言映射到 (板块ID, 排序key)。
 
-    返回:
-        {"sector_id": "BK123456", "sector_title": "人工智能", "sort_key": "1y", "sort_label": "近1月"}
+    返回 {"sector_id": str, "sector_title": str, "sort_key": str, "sort_label": str}。
+    LLM 解析失败时返回默认值（不筛选板块）。
     """
     tags_text = "\n".join(f"- {t['title']}（ID: {t['id']}）" for t in tags)
     sort_text = "\n".join(f"- {label}（key: {key}）" for label, key in SORT_DICT.items())
 
-    system_prompt = SYSTEM_PROMPT_SELECT_FUND.replace("{tags_text}", tags_text).replace("{sort_text}", sort_text)
+    system_prompt = SYSTEM_PROMPT_SELECT_FUND.replace(
+        "{tags_text}", tags_text
+    ).replace("{sort_text}", sort_text)
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -70,25 +87,23 @@ async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict
     try:
         return json.loads(response)
     except json.JSONDecodeError:
-        # 本地 LLM 偶发输出非 JSON → 返回默认值，不做板块筛选
         return {"sector_id": "", "sector_title": "未知板块", "sort_key": "1y", "sort_label": "近1月"}
 
 
-# ── 主入口 ──
+# ═══════════════════════════════════════════════════════════════════
+# 主入口
+# ═══════════════════════════════════════════════════════════════════
+
 
 async def select_fund(user_query: str) -> str:
-    """根据用户自然语言查询，返回指定板块 + 时间段下收益前十的基金（格式化文本）。
-
-    示例:
-        result = await select_fund("AI应用板块近1月前十收益")
-    """
+    """根据用户自然语言查询，返回指定板块 + 时间段下收益前十的基金（格式化文本）。"""
     tags = await _fetch_board_tags()
     match = await _match_user_query(user_query, tags)
 
-    # LLM 匹配失败时 sector_id 为空，提前返回语义化报错
     if not match.get("sector_id"):
         return "错误: 未能识别您查询的板块，请尝试更具体的板块名称"
 
+    # ── 请求基金排名 API ──
     requests_url = "https://fund.eastmoney.com/data/FundGuideapi.aspx"
     requests_payload = {
         "dt": "4",
@@ -106,11 +121,12 @@ async def select_fund(user_query: str) -> str:
 
     async with httpx.AsyncClient(headers=HEADERS, timeout=30) as client:
         resp = await client.get(url=requests_url, params=requests_payload)
-        # 响应是 JSONP 格式: var rankData = {...};
+        # ── JSONP 解包：var rankData = {...}; ──
         raw = resp.text.strip()
         raw = raw.removeprefix("var rankData =").removesuffix(";").strip()
         data = json.loads(raw)
 
+    # ── 格式化输出 ──
     funds: list[str] = []
     for item in data.get("datas", []):
         parts = item.split(",")

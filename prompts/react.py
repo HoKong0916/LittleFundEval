@@ -102,12 +102,10 @@ Action: get_fund_performance(fund_code="012345")
 
 ## 输入
 
-**当前问题**
-{user_question}
-
 **建议起始工具**
 {initial_tools}
 
+当前用户问题以独立消息提供。
 当前对话历史与工具调用记录将按顺序提供，每一条格式为：
 [步骤 N] Thought: ... Action: ... Observation: ...
 

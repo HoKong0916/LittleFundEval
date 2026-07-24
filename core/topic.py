@@ -68,9 +68,12 @@ async def is_same_topic(current: str, history: list[dict]) -> bool:
         role = "用户" if m["role"] == "user" else "助手"
         recent_turns.append(f"{role}：{m['content']}")
     recent_text = "\n".join(recent_turns)
-    prompt = SYSTEM_PROMPT_TOPIC.replace("{history_context}", recent_text).replace("{user_question}", current[:600])
+    system_prompt = SYSTEM_PROMPT_TOPIC.replace("{history_context}", recent_text)
     try:
-        result = await local_chat([{"role": "user", "content": prompt}], temperature=0.0)
+        result = await local_chat([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": current[:600]},
+        ], temperature=0.0)
         return result is not None and "YES" in result.strip().upper()
     except Exception:
         return True  # LLM 不可用，保守保留

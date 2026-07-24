@@ -1,3 +1,12 @@
+"""板块资金流向工具 —— 获取各板块今日/近1周/近1月/近3月的资金流入流出数据。
+
+两种模式：
+    - 不传 sectors → 展示各时间段 TOP5 流入/流出板块
+    - 传入 sectors → 按指定板块展示四个时间段的资金流向
+
+板块名称通过本地 LLM 做模糊匹配，用户不需要知道 API 内部的确切命名。
+"""
+
 import asyncio
 import json
 import re
@@ -6,6 +15,10 @@ import httpx
 from llm_client import local_chat
 from prompts.capital_inflow import SYSTEM_PROMPT_CAPITAL_INFLOW
 
+
+# ═══════════════════════════════════════════════════════════════════
+# 常量 & 工具函数
+# ═══════════════════════════════════════════════════════════════════
 
 _PERIOD_LABEL = {
     "FLOW": "今日",
@@ -22,10 +35,16 @@ def _format_flow(val: float) -> str:
     return f"{sign}{yi:.2f}亿"
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 数据抓取
+# ═══════════════════════════════════════════════════════════════════
+
+
 async def _fetch_period(client: httpx.AsyncClient, st: str) -> tuple[str, list[dict]] | None:
     """抓取单个时间段（今日/近1周/近1月/近3月）的板块资金流向数据。
 
-    错误全吞并返回 None —— 四个时间段并发抓取，单个失败不影响其余。
+    返回 (周期标识, [{"名称": ..., "代码": ..., "流量": ...}])，
+    单个时间段失败返回 None，不影响其余并发请求。
     """
     url = "https://api.fund.eastmoney.com/ztjj/GetZTJJListNew"
     params = {"tt": "0", "dt": "zjlr", "st": st}
@@ -35,7 +54,7 @@ async def _fetch_period(client: httpx.AsyncClient, st: str) -> tuple[str, list[d
     except Exception:
         return None
 
-    # jQuery callback 解包: jQuery123({...}) → {...}
+    # ── jQuery callback 解包 ──
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if not m:
         return None
@@ -51,10 +70,16 @@ async def _fetch_period(client: httpx.AsyncClient, st: str) -> tuple[str, list[d
     ]
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 板块名匹配
+# ═══════════════════════════════════════════════════════════════════
+
+
 async def _match_sectors(user_sectors: list[str], available_names: list[str]) -> list[str]:
     """用本地 LLM 将用户输入的板块名模糊匹配到 API 实际返回的板块名。
 
     返回与 user_sectors 一一对应的匹配结果，匹配不到的为空字符串。
+    LLM 调用失败则降级为原样返回。
     """
     board_names = "\n".join(f"- {n}" for n in available_names)
     system_prompt = SYSTEM_PROMPT_CAPITAL_INFLOW.replace("{board_names}", board_names)
@@ -69,22 +94,23 @@ async def _match_sectors(user_sectors: list[str], available_names: list[str]) ->
         response = await local_chat(messages, temperature=0.0)
         result = json.loads(response)
         matched = result.get("matched", [])
-        # 保证长度一致
         if len(matched) != len(user_sectors):
-            return user_sectors  # 降级：原样返回
+            return user_sectors
         return matched
     except Exception:
-        return user_sectors  # 降级：原样返回
+        return user_sectors
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 主入口
+# ═══════════════════════════════════════════════════════════════════
 
 
 async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
     """获取各板块资金流向（今日 / 近1周 / 近1月 / 近3月），返回格式化文本。
 
-    Args:
-        sectors: 可选，指定板块名称列表。传入后按板块维度展示每个板块在四个时间段的资金流向；
-                 不传则展示各时间段 TOP5 流入/流出。
+    四个时间段并发抓取，单段失败不影响其余。
     """
-
     period_data: dict[str, list[dict]] = {}
 
     async with httpx.AsyncClient(
@@ -95,7 +121,7 @@ async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
         timeout=30,
     ) as client:
 
-        # 四个时间段并发抓取，return_exceptions=True 防止单段异常取消其余请求
+        # ── 四个时间段并发抓取 ──
         results = await asyncio.gather(
             _fetch_period(client, "FLOW"),
             _fetch_period(client, "FLOW_W"),
@@ -124,7 +150,7 @@ async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
 
         matched_sectors = await _match_sectors(sectors, all_sector_names)
 
-        # ── 指定板块模式：按板块维度展示 ──
+        # ── 指定板块模式：按板块维度展示四个时间段 ──
         for user_input, matched_name in zip(sectors, matched_sectors):
             lines.append(f"【{user_input}】")
             if not matched_name:

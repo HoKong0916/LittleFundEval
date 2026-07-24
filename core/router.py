@@ -25,7 +25,6 @@ async def classify_intent(
     system_prompt = (
         SYSTEM_PROMPT_ROUTER
         .replace("{tools_json}", tools_prompt_json())
-        .replace("{user_question}", user_question)
     )
 
     # 替换 history_context 占位符
@@ -37,7 +36,10 @@ async def classify_intent(
     else:
         system_prompt = system_prompt.replace("{history_context}", "")
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_question},
+    ]
 
     response = await local_chat(messages=messages)
     try:

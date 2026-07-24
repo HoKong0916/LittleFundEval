@@ -1,8 +1,9 @@
+"""基金持仓查询工具 —— 抓取天天基金前十重仓股、主攻板块、截止日期。"""
+
 import re
 
 import httpx
 from bs4 import BeautifulSoup
-
 
 async def get_fund_holdings(fund_code: str) -> str:
     """获取基金前十持仓信息，返回格式化文本。"""
@@ -82,6 +83,6 @@ async def get_fund_holdings(fund_code: str) -> str:
         "",
         "━━━ 前十持仓 ━━━",
         *holdings,
-        f"  前十持仓占比合计: {total_ratio}",
+        f"  前十股票持仓占比合计: {total_ratio}",
     ]
     return "\n".join(line for line in lines if line is not None)

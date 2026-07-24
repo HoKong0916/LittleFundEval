@@ -22,7 +22,4 @@ SYSTEM_PROMPT_DIRECT_ANSWER = """
 
 **对话历史**
 {history_context}
-
-**当前问题**
-{user_question}
 """

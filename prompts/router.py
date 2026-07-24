@@ -233,7 +233,4 @@ SYSTEM_PROMPT_ROUTER = """
 
 **对话历史**
 {history_context}
-
-**当前问题**
-{user_question}
 """

@@ -5,6 +5,7 @@ import json
 from tools.search_fund import search_fund
 from tools.fund_performance import get_fund_performance
 from tools.fund_holding import get_fund_holdings
+from tools.estimate_nav import estimate_fund_nav
 from tools.capital_inflow import capital_inflow_in_sectors
 from tools.select_fund import select_fund
 
@@ -70,6 +71,24 @@ TOOLS_SCHEMA: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "estimate_fund_nav",
+            "description": "预估基金盘中实时净值涨幅。通过前十重仓股当日涨跌×持仓比例 + 板块实时涨幅×非重仓仓位，逐只计算持仓贡献后汇总，比 fundgz 接口的简单估算更精细。返回每只重仓股的贡献明细和总估算涨幅。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fund_code": {
+                        "type": "string",
+                        "description": "6位数字基金代码",
+                    }
+                },
+                "required": ["fund_code"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "capital_inflow_in_sectors",
             "description": "获取各板块资金流向（今日/近1周/近1月/近3月）。不传sectors则展示各时间段TOP5流入流出板块；传入sectors则按指定板块展示四个时间段的资金流向",
             "parameters": {
@@ -114,6 +133,7 @@ TOOLS_MAP: dict = {
     "search_fund": search_fund,
     "get_fund_performance": get_fund_performance,
     "get_fund_holdings": get_fund_holdings,
+    "estimate_fund_nav": estimate_fund_nav,
     "capital_inflow_in_sectors": capital_inflow_in_sectors,
     "select_fund": select_fund,
 }

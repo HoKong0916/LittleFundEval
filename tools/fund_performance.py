@@ -33,7 +33,7 @@ async def get_fund_performance(fund_code: str) -> str:
             if isinstance(r, Exception):
                 errors.append(f"{name}: {r}")
 
-    if errors and not result:
+    if errors and len(result) <= 1:
         return f"错误: {'; '.join(errors)}"
 
     return _format(result, errors)

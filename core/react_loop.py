@@ -81,7 +81,6 @@ async def run_react_loop(
     system_prompt = (
         SYSTEM_PROMPT_REACT
         .replace("{tools_json}", tools_prompt_json())
-        .replace("{user_question}", user_question)
         .replace("{initial_tools}", str(tools_needed))
     )
 
@@ -93,7 +92,10 @@ async def run_react_loop(
             "你必须通过工具获取最新数据，不能直接复制历史回答。"
         )
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_question},
+    ]
     if has_context:
         messages.extend(history)
 

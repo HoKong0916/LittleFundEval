@@ -21,10 +21,12 @@ async def run_direct_answer(
     system_prompt = (
         SYSTEM_PROMPT_DIRECT_ANSWER
         .replace("{history_context}", history_text)
-        .replace("{user_question}", user_question)
     )
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_question},
+    ]
 
     await trace.log(session_id, step=0, event="router.direct_answer",
                     input={"question": user_question[:200]})
