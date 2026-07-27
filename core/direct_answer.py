@@ -1,3 +1,16 @@
+"""直接回答模式 —— 不调用工具，纯 LLM 知识 + 历史对话综合生成回答。
+
+适用场景（由 router 判断）:
+    - 投资知识科普（"什么是最大回撤"）
+    - 金融概念解释（"ETF 和 LOF 有什么区别"）
+    - 策略讨论（"如何做资产配置"）
+    - 不涉及实时数据的任何对话
+
+与 ReAct / REWOO 的区别:
+    本模块无工具调用路径，系统 prompt 中无 tools_json 占位符。
+    on_chunk 回调支持 CLI print 和 SSE 流式两种输出模式。
+"""
+
 import time
 from typing import Awaitable, Callable, Optional
 
@@ -7,6 +20,7 @@ from llm_client import cloud_chat
 from prompts.direct_answer import SYSTEM_PROMPT_DIRECT_ANSWER
 
 
+# 流式输出回调类型: 接收 LLM 增量文本，异步处理(如 SSE push / CLI print)
 OutputCallback = Callable[[str], Awaitable[None]]
 
 

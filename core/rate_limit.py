@@ -65,9 +65,19 @@ class RateLimiter:
     # ── 限流检查 ──────────────────────────────────────────────
 
     async def check(self, token_info: TokenInfo) -> tuple[bool, int]:
-        """检查是否放行。返回 (放行?, 剩余窗口秒数)。
+        """检查是否放行。返回 (放行?, Retry-After 秒数)。
+
+        算法: 滑动窗口日志（Sliding Window Log）
+            Redis Sorted Set 为每个 token 维护请求时间戳。
+            ZSET key = ratelimit:{token}
+            score  = 请求时刻的毫秒时间戳
+            member = 同上（不存冗余数据）
+
+        每条记录自动过期 —— ZREMRANGEBYSCORE 清除窗口外的旧条目，
+        EXPIRE 兜底清理冷 token 的 key。
 
         admin 直接放行，不消耗 Redis 配额。
+        Redis 不可用时降级放行（不阻塞业务）。
         """
         if token_info.tier == "admin":
             return True, 0
@@ -77,19 +87,26 @@ class RateLimiter:
 
         now_ms = int(time.time() * 1000)
         window_ms = RATE_LIMIT_WINDOW_SECONDS * 1000
-        cutoff_ms = now_ms - window_ms
+        cutoff_ms = now_ms - window_ms           # 滑动窗口左边界
         key = f"ratelimit:{token_info.token}"
 
         try:
+            # ── 管道原子执行（3 条命令，1 次网络往返）────────────
+            # 1. ZREMRANGEBYSCORE → 删除窗口外的旧时间戳
+            # 2. ZCARD             → 统计窗口内剩余请求数
+            # 3. ZADD              → 插入当前请求时间戳
+            # 4. EXPIRE            → 窗口 × 2 TTL，清理长期不活跃的 key
             async with self._redis.pipeline() as pipe:
                 pipe.zremrangebyscore(key, 0, cutoff_ms)
                 pipe.zcard(key)
                 pipe.zadd(key, {str(now_ms): now_ms})
-                pipe.expire(key, RATE_LIMIT_WINDOW_SECONDS * 2)  # 窗口2倍TTL兜底
+                pipe.expire(key, RATE_LIMIT_WINDOW_SECONDS * 2)
                 _, count, _, _ = await pipe.execute()
 
+            # count 是插入前的窗口内请求数（不含当前这条）
+            # 如果 >= 阈值，说明加上当前请求就超限
             if count >= RATE_LIMIT_MAX_REQUESTS:
-                # 计算 Retry-After：取窗口中最早记录的时间
+                # 计算 Retry-After：窗口剩余时间 = 最早记录过期时刻 - now
                 oldest_raw = await self._redis.zrange(key, 0, 0, withscores=True)
                 if oldest_raw:
                     oldest_ms = oldest_raw[0][1]
@@ -99,5 +116,6 @@ class RateLimiter:
 
             return True, 0
         except Exception:
+            # Redis 异常 → 标记不可用，本次放行
             self._redis = None
             return True, 0

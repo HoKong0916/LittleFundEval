@@ -167,25 +167,39 @@ class MemoryManager:
         else:
             self._fallback[session_id] = messages
 
-    # ── 会话锁 ──────────────────────────────────────────────
+    # ── 会话锁（并发写入保护）────────────────────────────────
 
     async def acquire_session_lock(self, session_id: str, ttl: int = 60) -> bool:
         """获取会话处理锁。获取到 → True，已被占用 → False。
 
-        SETNX + EXPIRE 是原子操作，TTL 自动防死锁。
-        Redis 不可用时降级放行（不阻塞请求）。
+        使用场景:
+            FastAPI /chat/stream 端点。同 session_id 的请求必须串行处理，
+            否则并发 append_message 会导致 Redis List 中消息乱序甚至丢失。
+
+        实现:
+            Redis `SET key value NX EX ttl`（redis-py 封装为 nx=True, ex=ttl）。
+            NX = 仅当 key 不存在时才写入 → 原子性"抢锁"。
+            EX = 锁自动过期，防止进程崩溃后锁永不释放。
+
+        Redis 不可用时降级放行（不阻塞请求，并发问题靠单进程 asyncio 消解）。
         """
         if not self._connected:
             return True
         key = f"session:{session_id}:lock"
         try:
+            # SETNX + EXPIRE 的原子组合：
+            # nx=True → key 不存在才 set（获取锁）
+            # ex=ttl → 锁最多活 60s，即使忘记释放也不会死锁
             return await self._redis.set(key, "1", nx=True, ex=ttl)
         except Exception:
             self._redis = None
             return True
 
     async def release_session_lock(self, session_id: str) -> None:
-        """释放会话处理锁。"""
+        """释放会话处理锁。
+
+        正常流程在 runner() 的 finally 块中调用，确保即使 run_chat 抛异常也会释放锁。
+        """
         if self._connected:
             key = f"session:{session_id}:lock"
             try:

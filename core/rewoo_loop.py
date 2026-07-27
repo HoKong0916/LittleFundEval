@@ -1,3 +1,22 @@
+"""REWOO 执行器 —— 三阶段流水线：提取 → 并行获取 → 综合回答。
+
+REWOO = REasoning WithOut Observations（推理与数据获取分离），
+与 ReAct 的 Think → Act → Observe 交替模式不同，
+REWOO 先批量并发获取所有数据，再一次生成回答。
+
+三阶段:
+    阶段1（提取）：LLM 从用户问题中提取基金名称 → search_fund 搜索代码
+    阶段2（获取）：per-fund 工具按基金代码展开 + 独立工具，单次 asyncio.gather 全部发出
+    阶段3（综合）：将所有 Observation 注入 system prompt，cloud_chat 流式生成回答
+
+优势:
+    - N 只基金的 per-fund 工具全部并发，墙钟时间 ≈ 最慢单次 TCP 往返
+    - 不反复调 LLM 做上下文判断，节省 token
+
+流式输出:
+    on_chunk=None → CLI print(); 否则 → await on_chunk(text) (SSE push)。
+"""
+
 import asyncio
 import json
 import re

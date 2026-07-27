@@ -1,3 +1,17 @@
+"""CLI 测试入口 —— 复用 run_chat 编排管道，在终端直接测试完整对话流程。
+
+用法:
+    python test_main.py
+
+与 FastAPI /chat/stream 的区别:
+    本脚本 on_chunk=None，输出退化为 print()，适合命令行调试。
+    FastAPI 端点 on_chunk=回调，输出为 SSE 事件流。
+
+会话持久化:
+    session_id 保存在项目根目录的 .session_id 文件中，
+    每次运行复用同一个 session_id，可以测试多轮对话和摘要压缩。
+"""
+
 import asyncio
 import os
 import sys

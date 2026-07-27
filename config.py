@@ -79,10 +79,14 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 
 # ── API Token 管理 ──────────────────────────────────────────
+# SQLite 数据库路径，存储 api_tokens 表（token / user_id / tier / 过期 / 吊销）
+# 首次启动时自动建表 + 种子 admin token
 TOKEN_DB_PATH = os.getenv("TOKEN_DB_PATH", "./data/tokens.db")
 
-# ── API 限流 ──────────────────────────────────────────────
-# visitor: 每分钟 5 次；admin: 不限流
+# ── API 限流（滑动窗口日志算法）────────────────────────────
+# visitor: 每分钟 RATE_LIMIT_MAX_REQUESTS 次
+# admin: 不限流（core/rate_limit.py 中 tier == "admin" 直接放行）
+# Redis 不可用时降级放行，不阻塞业务
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "5"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 

@@ -1,3 +1,22 @@
+"""ReAct 执行器 —— Thought → Action → Observation 循环。
+
+流程:
+    1. LLM 输出 "Thought: ... Action: tool_name(param=val)"
+    2. 增量检测到闭括号 → 截断流，dispatch 执行工具
+    3. "Observation: <工具结果>" 追加到对话 → 下一轮循环
+    4. 最多 MAX_STEPS 步，超限强制要求总结
+
+增量解析:
+    _try_parse_action 每次收到 chunk 就检查 Action 是否完整。
+    只在 Action 闭括号到达时截断，不截断 Final Answer。
+    这样做的好处：工具调用不需要等 LLM 把整段 Response 说完，
+    观察到 Action 就立刻调工具，减少用户等待时间。
+
+流式输出:
+    Final Answer 不提前截断 —— 用 cloud_chat 流式逐 token 输出给用户。
+    on_chunk=None → CLI print(); 否则 → await on_chunk(text) (SSE push)。
+"""
+
 import json
 import re
 import time
@@ -170,8 +189,10 @@ async def run_react_loop(
             break
 
         if "final_answer" in parsed:
-            # 拦截：路由明确需要工具但第 1 步就直接回答 → 注入纠正提示
-            # 防止模型跳过数据获取直接基于训练数据编造答案
+            # ── skip_guard：路由明确需要工具但第 1 步就直接回答 ──
+            # 场景：模型偷懒，跳过数据获取直接基于训练数据编造答案。
+            # 例如用户问"011971 基金最近表现" → 模型不调工具，直接编一个收益率。
+            # 注入纠正提示，强制模型进入工具调用循环。
             if step == 1 and tools_needed:
                 await trace.log(session_id, step=step, event="react.skip_guard",
                                 input=parsed)
