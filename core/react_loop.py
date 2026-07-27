@@ -1,12 +1,16 @@
 import json
 import re
 import time
+from typing import Awaitable, Callable, Optional
 
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
 from tools import tools_prompt_json
 from core.dispatch import dispatch_tool
 from core.trace import TraceLogger
+
+
+OutputCallback = Callable[[str], Awaitable[None]]
 
 
 MAX_STEPS = 5
@@ -71,6 +75,8 @@ async def run_react_loop(
     has_context: bool,
     trace: TraceLogger,
     session_id: str,
+    *,
+    on_chunk: Optional[OutputCallback] = None,
 ) -> str:
     """ReAct 执行器：Thought → Action → Observation 循环。
 
@@ -176,8 +182,11 @@ async def run_react_loop(
                 })
                 continue
             final_answer = parsed["final_answer"]
-            # Final Answer 是用户可见的最终输出，打印出来
-            print(final_answer)
+            # Final Answer 是用户可见的最终输出
+            if on_chunk:
+                await on_chunk(final_answer)
+            else:
+                print(final_answer)
             await trace.log(session_id, step=step, event="react.final_answer",
                             output=final_answer)
             break
@@ -216,10 +225,14 @@ async def run_react_loop(
             async for chunk in cloud_chat(messages):
                 if chunk["type"] == "text":
                     fallback_buffer += chunk["content"]
-                    print(chunk["content"], end="", flush=True)
+                    if on_chunk:
+                        await on_chunk(chunk["content"])
+                    else:
+                        print(chunk["content"], end="", flush=True)
                 elif chunk["type"] == "done":
                     break
-            print()
+            if not on_chunk:
+                print()
             final_answer = fallback_buffer
 
     return final_answer

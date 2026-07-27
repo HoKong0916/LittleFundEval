@@ -167,6 +167,32 @@ class MemoryManager:
         else:
             self._fallback[session_id] = messages
 
+    # ── 会话锁 ──────────────────────────────────────────────
+
+    async def acquire_session_lock(self, session_id: str, ttl: int = 60) -> bool:
+        """获取会话处理锁。获取到 → True，已被占用 → False。
+
+        SETNX + EXPIRE 是原子操作，TTL 自动防死锁。
+        Redis 不可用时降级放行（不阻塞请求）。
+        """
+        if not self._connected:
+            return True
+        key = f"session:{session_id}:lock"
+        try:
+            return await self._redis.set(key, "1", nx=True, ex=ttl)
+        except Exception:
+            self._redis = None
+            return True
+
+    async def release_session_lock(self, session_id: str) -> None:
+        """释放会话处理锁。"""
+        if self._connected:
+            key = f"session:{session_id}:lock"
+            try:
+                await self._redis.delete(key)
+            except Exception:
+                self._redis = None
+
     # ── 元数据 ────────────────────────────────────────────────
 
     async def get_meta(self, session_id: str) -> dict:
@@ -182,6 +208,7 @@ class MemoryManager:
             await self._redis.delete(
                 self._msg_key(session_id),
                 self._meta_key(session_id),
+                self._summary_flag_key(session_id),
             )
         else:
             self._fallback.pop(session_id, None)

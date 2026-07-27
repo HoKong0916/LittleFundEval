@@ -1,10 +1,5 @@
 __pycache__
-environment.yml
-requirement.txt
-docs/superpowers/plans
-docs/superpowers/specs
-core/__pycache__
-prompts/__pycache__
 appendonly.aof
 .session_id
 llama_server.pid
+.claude/

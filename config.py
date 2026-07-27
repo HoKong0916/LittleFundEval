@@ -78,6 +78,14 @@ REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 
+# ── API Token 管理 ──────────────────────────────────────────
+TOKEN_DB_PATH = os.getenv("TOKEN_DB_PATH", "./data/tokens.db")
+
+# ── API 限流 ──────────────────────────────────────────────
+# visitor: 每分钟 5 次；admin: 不限流
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "5"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+
 # ── 调试 trace ──────────────────────────────────────────────
 # 设为 "1" 时终端实时展示人类可读的 ReAct/REWOO 进度提示
 # trace 数据（含 Thought/Action/Observation 原文）始终写入 Redis
