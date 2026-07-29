@@ -6,6 +6,7 @@
 import asyncio
 import json
 import re
+from datetime import datetime
 
 import akshare as ak
 import httpx
@@ -39,9 +40,7 @@ async def get_fund_performance(fund_code: str) -> str:
     return _format(result, errors)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 数据源
-# ═══════════════════════════════════════════════════════════════════
+# ── 数据源 ───────────────────────────────────────────────────────
 
 
 async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient) -> None:
@@ -96,7 +95,6 @@ def _ts_to_date(ts) -> str:
     if not ts:
         return ""
     try:
-        from datetime import datetime
         return datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
     except Exception:
         return ""
@@ -165,12 +163,11 @@ def _fetch_risk(result: dict, fund_code: str) -> None:
         pass
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 格式化
-# ═══════════════════════════════════════════════════════════════════
+# ── 格式化 ───────────────────────────────────────────────────────
 
 
 def _format(d: dict, errors: list[str]) -> str:
+    """将 get_fund_performance 收集的结果 dict 格式化为多段文本（基本信息/收益/风险/当天/数据源异常）。"""
     lines = []
 
     # ── 头部：基本信息 ──

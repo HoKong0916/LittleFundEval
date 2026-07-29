@@ -7,3 +7,4 @@ tiktoken
 fastapi
 uvicorn
 pandas
+lark-oapi>=1.0.0

@@ -1,26 +1,19 @@
-"""对话编排管道 —— 将 test_main.py 的 6 步管道抽成独立函数。
+"""对话编排管道 —— 非流式：内部逐 token 累积，返回完整 answer。
 
 用法:
     async with MemoryManager() as memory, TraceLogger() as trace:
-        result = await run_chat(
-            session_id, user_message, memory, trace,
-            on_chunk=my_callback,   # None = CLI print 模式
-        )
+        result = await run_chat(session_id, user_message, memory, trace)
 """
 
-from typing import Awaitable, Callable, Optional
-
-from core.router import classify_intent
-from core.react_loop import run_react_loop
-from core.rewoo_loop import run_rewoo_loop
-from core.topic import is_same_topic
+from config import MAX_TOKEN_THRESHOLD, count_tokens
 from core.direct_answer import run_direct_answer
 from core.memory import MemoryManager
-from core.trace import TraceLogger
+from core.react_loop import run_react_loop
+from core.rewoo_loop import run_rewoo_loop
+from core.router import classify_intent
 from core.summarizer import summarize_session
-from config import count_tokens, MAX_TOKEN_THRESHOLD
-
-OutputCallback = Callable[[str], Awaitable[None]]
+from core.topic import is_same_topic
+from core.trace import TraceLogger
 
 
 async def run_chat(
@@ -28,13 +21,13 @@ async def run_chat(
     user_message: str,
     memory: MemoryManager,
     trace: TraceLogger,
-    *,
-    on_chunk: Optional[OutputCallback] = None,
 ) -> dict:
-    """执行一次完整的对话管道。
+    """执行一次完整的对话管道，返回 {"answer": str, "category": str}。
 
-    返回 {"answer": str, "category": str}。
-    on_chunk=None 时，输出退化为 print()（CLI 模式）。
+    session_id 语义：
+        飞书通道 → 用户的 open_id
+        API 通道  → token 的 user_id
+    不再生成随机 UUID。
     """
     # ── 摘要检查（N+1 轮启动时）───
     need_summary = await memory.check_and_clear_summary_flag(session_id)
@@ -59,17 +52,16 @@ async def run_chat(
     if category == "DirectAnswer":
         answer = await run_direct_answer(
             msg_list, history, has_context, trace, session_id,
-            on_chunk=on_chunk,
         )
     elif category == "ReAct":
         answer = await run_react_loop(
             msg_list, decision["tools_needed"], history, has_context,
-            trace, session_id, on_chunk=on_chunk,
+            trace, session_id,
         )
     elif category == "REWOO":
         answer = await run_rewoo_loop(
             msg_list, decision["tools_needed"], history, has_context,
-            trace, session_id, on_chunk=on_chunk,
+            trace, session_id,
         )
     else:
         answer = ""

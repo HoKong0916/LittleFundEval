@@ -13,24 +13,21 @@ REWOO 先批量并发获取所有数据，再一次生成回答。
     - N 只基金的 per-fund 工具全部并发，墙钟时间 ≈ 最慢单次 TCP 往返
     - 不反复调 LLM 做上下文判断，节省 token
 
-流式输出:
-    on_chunk=None → CLI print(); 否则 → await on_chunk(text) (SSE push)。
+非流式:
+    内部仍流式调用 cloud_chat（不增加等待时间），
+    累积完整输出后一次返回。
 """
 
 import asyncio
 import json
 import re
 import time
-from typing import Awaitable, Callable, Optional
 
 from core.dispatch import dispatch_tool
+from core.history_formatter import format_history_assistant_only, format_history_dialogue
 from core.trace import TraceLogger
-from core.history_formatter import format_history_dialogue, format_history_assistant_only
 from llm_client import cloud_chat, local_chat
 from prompts.rewoo import SYSTEM_PROMPT_REWOO_EXTRACT, SYSTEM_PROMPT_REWOO_SYNTHESIS
-
-
-OutputCallback = Callable[[str], Awaitable[None]]
 
 
 _CODE_RE = re.compile(r"\b\d{6}\b")
@@ -163,13 +160,8 @@ def _format_observations(observations: dict) -> str:
 async def _synthesize(
     user_message: list, observations: dict, history: list[dict],
     has_context: bool, trace: TraceLogger, session_id: str,
-    *,
-    on_chunk: Optional[OutputCallback] = None,
 ) -> str:
-    """用 cloud_chat 流式生成最终回答。
-
-    on_chunk=None → CLI print 模式，否则逐 chunk 回调。
-    """
+    """用 cloud_chat 流式生成最终回答，累积完整输出后返回。"""
     system_prompt = (
         SYSTEM_PROMPT_REWOO_SYNTHESIS
         .replace("{observations}", _format_observations(observations))
@@ -180,8 +172,6 @@ async def _synthesize(
     messages.extend(user_message)
 
     t0 = time.perf_counter()
-    if not on_chunk:
-        print()
     buffer = ""
     llm_usage = None
     gen = cloud_chat(messages)
@@ -189,10 +179,6 @@ async def _synthesize(
         async for chunk in gen:
             if chunk["type"] == "text":
                 buffer += chunk["content"]
-                if on_chunk:
-                    await on_chunk(chunk["content"])
-                else:
-                    print(chunk["content"], end="", flush=True)
             elif chunk["type"] == "done":
                 llm_usage = chunk.get("usage")
                 break
@@ -200,8 +186,6 @@ async def _synthesize(
         await gen.aclose()
 
     latency = (time.perf_counter() - t0) * 1000
-    if not on_chunk:
-        print()
 
     await trace.log(session_id, step=0, event="rewoo.phase3.done",
                     latency_ms=latency, tokens=llm_usage,
@@ -213,20 +197,12 @@ async def _synthesize(
 async def run_rewoo_loop(
     user_message: list, tools_needed: list, history: list[dict],
     has_context: bool, trace: TraceLogger, session_id: str,
-    *,
-    on_chunk: Optional[OutputCallback] = None,
 ) -> str:
     """REWOO 执行器：LLM提取基金名 → 解析代码 → 并发拉数据 → 综合回答。
 
     Thought/Action/Observation 原文仅写入 trace JSON 日志。
-    on_chunk=None → CLI print 模式，否则逐 chunk 回调。
     """
     user_question = user_message[-1]["content"] if user_message else ""
-
-    # ── REWOO 三阶段流水线 ─────────────────────────────────────
-    # 阶段1：LLM 提取基金名 → search_fund 搜索代码 → 正则兜底
-    # 阶段2：per-fund 工具按代码展开 + 独立工具，全部并发执行
-    # 阶段3：将所有 Observation 注入 system prompt，流式生成最终回答
 
     # ── 阶段1：解析基金名称与代码 ──
     await trace.log(session_id, step=0, event="rewoo.phase1.extract",
@@ -249,4 +225,4 @@ async def run_rewoo_loop(
     await trace.log(session_id, step=0, event="rewoo.phase3.start")
 
     return await _synthesize(user_message, observations, history, has_context,
-                             trace, session_id, on_chunk=on_chunk)
+                             trace, session_id)

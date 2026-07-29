@@ -1,6 +1,21 @@
-import json, asyncio, logging
+"""LLM 客户端封装 —— 本地 llama.cpp（local_chat）与云端 DeepSeek（cloud_chat 流式）。
+
+local_chat 在 llama-server 不可用时支持降级到 DeepSeek（受 LLM_FALLBACK_TO_CLOUD 控制）。
+"""
+
+import asyncio
+import json
+import logging
+
 from openai import AsyncOpenAI
-from config import LLAMA_CPP_BASE_URL, DEEPSEEK_BASE_URL, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, LLM_FALLBACK_TO_CLOUD
+
+from config import (
+    LLAMA_CPP_BASE_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
+    LLM_FALLBACK_TO_CLOUD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +25,7 @@ _model_name: str | None = None
 
 
 async def _get_model_name() -> str:
+    """惰性获取并缓存 llama-server 首个模型 ID，避免每次请求重复拉取模型列表。"""
     global _model_name
     if _model_name is None:
         models = await _client.models.list()
@@ -58,7 +74,7 @@ async def cloud_chat(
         "messages": messages,
         "temperature": temperature,
         "stream": True,
-        "extra_body":{"thinking": {"type": "disabled"}}
+        "extra_body": {"thinking": {"type": "disabled"}}
     }
     if tools:
         kwargs["tools"] = tools

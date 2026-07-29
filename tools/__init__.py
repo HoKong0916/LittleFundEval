@@ -9,9 +9,7 @@ from tools.estimate_nav import estimate_fund_nav
 from tools.capital_inflow import capital_inflow_in_sectors
 from tools.select_fund import select_fund
 
-# ═══════════════════════════════════════════════════════════════════
-# JSON Schema 定义（OpenAI/DeepSeek function calling 格式）
-# ═══════════════════════════════════════════════════════════════════
+# ── JSON Schema 定义（OpenAI/DeepSeek function calling 格式）──────
 
 TOOLS_SCHEMA: list[dict] = [
     {
@@ -125,9 +123,7 @@ TOOLS_SCHEMA: list[dict] = [
     },
 ]
 
-# ═══════════════════════════════════════════════════════════════════
-# 工具名 → async 函数映射
-# ═══════════════════════════════════════════════════════════════════
+# ── 工具名 → async 函数映射 ──────────────────────────────────────
 
 TOOLS_MAP: dict = {
     "search_fund": search_fund,
@@ -138,9 +134,7 @@ TOOLS_MAP: dict = {
     "select_fund": select_fund,
 }
 
-# ═══════════════════════════════════════════════════════════════════
-# 辅助：供 prompt 使用的扁平化工具列表 JSON
-# ═══════════════════════════════════════════════════════════════════
+# ── 辅助：供 prompt 使用的扁平化工具列表 JSON ────────────────────
 
 
 def tools_prompt_json(indent: int = 2) -> str:

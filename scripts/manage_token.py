@@ -1,19 +1,24 @@
 """API Token 管理 CLI。
 
-用法:
-    python manage_token.py create --user-id bob --name "张三" [--tier admin] [--expires 2027-06-01]
-    python manage_token.py list
-    python manage_token.py revoke <token>
-    python manage_token.py delete <token>
+用法（从项目根目录执行）:
+    python scripts/manage_token.py create --user-id bob --name "张三" [--tier admin] [--expires 2027-06-01]
+    python scripts/manage_token.py list
+    python scripts/manage_token.py revoke <token>
+    python scripts/manage_token.py delete <token>
 """
 
 import argparse
+import os
 import sys
+
+# 将项目根目录加入 sys.path，使 core 包可被导入
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.token_db import create_token, list_tokens, revoke_token, delete_token
 
 
 def cmd_create(args: argparse.Namespace) -> None:
+    """处理 create 子命令：签发新 Token 并打印结果。"""
     token = create_token(
         user_id=args.user_id,
         name=args.name,
@@ -28,6 +33,7 @@ def cmd_create(args: argparse.Namespace) -> None:
 
 
 def cmd_list(args: argparse.Namespace) -> None:
+    """处理 list 子命令：列出所有 Token（含状态与过期）。"""
     tokens = list_tokens()
     if not tokens:
         print("  (无 Token)")
@@ -43,6 +49,7 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 
 def cmd_revoke(args: argparse.Namespace) -> None:
+    """处理 revoke 子命令：软吊销指定 Token。"""
     ok = revoke_token(args.token)
     if ok:
         print(f"\n  ✅ 已吊销: {args.token}\n")
@@ -52,6 +59,7 @@ def cmd_revoke(args: argparse.Namespace) -> None:
 
 
 def cmd_delete(args: argparse.Namespace) -> None:
+    """处理 delete 子命令：硬删除指定 Token。"""
     ok = delete_token(args.token)
     if ok:
         print(f"\n  ✅ 已删除: {args.token}\n")
@@ -61,6 +69,7 @@ def cmd_delete(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """解析命令行参数并分发到对应子命令处理函数。"""
     parser = argparse.ArgumentParser(description="API Token 管理")
     sub = parser.add_subparsers(dest="command", required=True)
 

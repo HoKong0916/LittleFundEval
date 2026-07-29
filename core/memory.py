@@ -8,16 +8,19 @@ Key 结构：
 Redis 不可用时自动降级为内存 dict。
 """
 
-import json
 import asyncio
+import json
+import logging
 from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 
-from config import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
+from config import REDIS_HOST, REDIS_PASSWORD, REDIS_PORT
+
+logger = logging.getLogger(__name__)
 
 
-MAX_MESSAGES = 50          # 保留最近 50 条消息（安全帽，日常由摘要系统管控 token）
+MAX_MESSAGES = 50          # 保留最近 50 条消息（硬上限，日常由摘要系统管控 token）
 TTL_SECONDS = 1800         # 30 分钟无操作过期
 RETRY_MAX = 3              # 连接重试次数
 RETRY_DELAY = 1.0          # 重试间隔（秒）
@@ -60,7 +63,7 @@ class MemoryManager:
                     await asyncio.sleep(RETRY_DELAY)
                 else:
                     self._redis = None  # 最终失败 → 降级
-                    print("[Memory] Redis 不可用，已降级为内存模式（数据不持久化）")
+                    logger.warning("Redis 不可用，Memory 已降级为内存模式（数据不持久化）")
 
     async def disconnect(self) -> None:
         """关闭 Redis 连接。"""
@@ -187,9 +190,6 @@ class MemoryManager:
             return True
         key = f"session:{session_id}:lock"
         try:
-            # SETNX + EXPIRE 的原子组合：
-            # nx=True → key 不存在才 set（获取锁）
-            # ex=ttl → 锁最多活 60s，即使忘记释放也不会死锁
             return await self._redis.set(key, "1", nx=True, ex=ttl)
         except Exception:
             self._redis = None

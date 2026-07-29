@@ -4,20 +4,29 @@
     rate_limiter = RateLimiter()
     await rate_limiter.connect()       # lifespan startup
     ...
-    token_info = await check_rate_limit(token_info, rate_limiter)  # Depends
+    # API 通道 —— 按 TokenInfo（admin 不限流，visitor 5次/分钟）
+    allowed, retry = await rate_limiter.check(token_info)
+    # 飞书通道 —— 按用户 open_id（5次/分钟）
+    allowed, retry = await rate_limiter.check_by_user_id(open_id)
     await rate_limiter.disconnect()    # lifespan shutdown
 """
 
-import time
 import asyncio
+import logging
+import time
 
 import redis.asyncio as aioredis
 
 from config import (
-    REDIS_HOST, REDIS_PORT, REDIS_PASSWORD,
-    RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECONDS,
+    RATE_LIMIT_MAX_REQUESTS,
+    RATE_LIMIT_WINDOW_SECONDS,
+    REDIS_HOST,
+    REDIS_PASSWORD,
+    REDIS_PORT,
 )
 from core.auth import TokenInfo
+
+logger = logging.getLogger(__name__)
 
 RETRY_MAX = 3
 RETRY_DELAY = 1.0
@@ -26,7 +35,7 @@ RETRY_DELAY = 1.0
 class RateLimiter:
     """滑动窗口限流器。
 
-    算法: ZREMRANGEBYSCORE + ZCARD + ZADD 管道执行（3 条命令原子化）。
+    算法: ZREMRANGEBYSCORE + ZCARD + ZADD + EXPIRE 管道执行（4 条命令原子化）。
     Redis 不可用时降级放行。
     """
 
@@ -51,7 +60,7 @@ class RateLimiter:
                     await asyncio.sleep(RETRY_DELAY)
                 else:
                     self._redis = None
-                    print("[RateLimit] Redis 不可用，限流降级为放行")
+                    logger.warning("Redis 不可用，RateLimit 已降级为放行")
 
     async def disconnect(self) -> None:
         if self._redis:
@@ -65,33 +74,38 @@ class RateLimiter:
     # ── 限流检查 ──────────────────────────────────────────────
 
     async def check(self, token_info: TokenInfo) -> tuple[bool, int]:
-        """检查是否放行。返回 (放行?, Retry-After 秒数)。
+        """检查 TokenInfo 是否放行。返回 (放行?, Retry-After 秒数)。
 
-        算法: 滑动窗口日志（Sliding Window Log）
-            Redis Sorted Set 为每个 token 维护请求时间戳。
-            ZSET key = ratelimit:{token}
-            score  = 请求时刻的毫秒时间戳
-            member = 同上（不存冗余数据）
-
-        每条记录自动过期 —— ZREMRANGEBYSCORE 清除窗口外的旧条目，
-        EXPIRE 兜底清理冷 token 的 key。
-
-        admin 直接放行，不消耗 Redis 配额。
-        Redis 不可用时降级放行（不阻塞业务）。
+        admin 直接放行，API 通道使用此方法。
         """
         if token_info.tier == "admin":
             return True, 0
+        return await self._sliding_window_check(f"ratelimit:token:{token_info.token}")
 
+    async def check_by_user_id(self, user_id: str) -> tuple[bool, int]:
+        """按用户 ID 检查是否放行。返回 (放行?, Retry-After 秒数)。
+
+        飞书通道使用此方法，按 open_id 限流 5 次/分钟。
+        Key 格式: ratelimit:{open_id}（与 session:{open_id}:... 风格统一）
+        """
+        return await self._sliding_window_check(f"ratelimit:{user_id}")
+
+    async def _sliding_window_check(self, key: str) -> tuple[bool, int]:
+        """滑动窗口日志算法核心，按给定 Redis key 限流。
+
+        key 由调用方拼接前缀区分通路：ratelimit:token:xxx（API）、ratelimit:{open_id}（飞书）。
+
+        Redis 不可用时降级放行（不阻塞业务）。
+        """
         if not self._connected:
             return True, 0
 
         now_ms = int(time.time() * 1000)
         window_ms = RATE_LIMIT_WINDOW_SECONDS * 1000
         cutoff_ms = now_ms - window_ms           # 滑动窗口左边界
-        key = f"ratelimit:{token_info.token}"
 
         try:
-            # ── 管道原子执行（3 条命令，1 次网络往返）────────────
+            # ── 管道原子执行（4 条命令，1 次网络往返）────────────
             # 1. ZREMRANGEBYSCORE → 删除窗口外的旧时间戳
             # 2. ZCARD             → 统计窗口内剩余请求数
             # 3. ZADD              → 插入当前请求时间戳

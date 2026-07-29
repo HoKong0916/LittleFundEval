@@ -5,15 +5,15 @@
 
 import json
 import random
+
 import httpx
 from bs4 import BeautifulSoup
+
 from llm_client import local_chat
 from prompts.select_fund import SYSTEM_PROMPT_SELECT_FUND
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 常量
-# ═══════════════════════════════════════════════════════════════════
+# ── 常量 ─────────────────────────────────────────────────────────
 
 URL = "https://fund.eastmoney.com/daogou/#dt4;ft;rs;sd;ed;pr;cp;rt;tp;rk;se;nx;sc1n;stdesc;pi1;pn20;zfdiy;shlist"
 
@@ -35,9 +35,7 @@ SORT_DICT = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 板块标签抓取
-# ═══════════════════════════════════════════════════════════════════
+# ── 板块标签抓取 ─────────────────────────────────────────────────
 
 
 async def _fetch_board_tags() -> list[dict[str, str]]:
@@ -61,9 +59,7 @@ async def _fetch_board_tags() -> list[dict[str, str]]:
         return tags
 
 
-# ═══════════════════════════════════════════════════════════════════
-# LLM 匹配板块 + 时间段
-# ═══════════════════════════════════════════════════════════════════
+# ── LLM 匹配板块 + 时间段 ────────────────────────────────────────
 
 
 async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict:
@@ -91,9 +87,7 @@ async def _match_user_query(user_query: str, tags: list[dict[str, str]]) -> dict
         return {"sector_id": "", "sector_title": "未知板块", "sort_key": "1y", "sort_label": "近1月"}
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 主入口
-# ═══════════════════════════════════════════════════════════════════
+# ── 主入口 ───────────────────────────────────────────────────────
 
 
 async def select_fund(user_query: str) -> str:

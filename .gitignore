@@ -1,5 +1,28 @@
-__pycache__
+# ── Python ────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# ── IDE / Editor ──────────────────────────────────────
+.vscode/
+.idea/
+
+# ── OS ────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+
+# ── 运行时产物 ────────────────────────────────────────
+data/*.log
+data/*.db-shm
+data/*.db-wal
 appendonly.aof
 .session_id
 llama_server.pid
+
+# ── Claude Code ───────────────────────────────────────
 .claude/

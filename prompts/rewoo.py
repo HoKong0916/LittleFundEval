@@ -1,4 +1,4 @@
-"""rewwo.py 专用 prompt —— REWOO 执行策略的基金名称提取与综合回答。
+"""rewoo.py 专用 prompt —— REWOO 执行策略的基金名称提取与综合回答。
 
 与 core/rewoo_loop.py 配合：
 - SYSTEM_PROMPT_REWOO_EXTRACT：Phase 1 中 LLM 提取需要查询的基金中文名称（跳过历史已覆盖的）

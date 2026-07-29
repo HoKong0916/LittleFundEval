@@ -1,3 +1,8 @@
+"""全局配置中心 —— 集中管理模型路径、推理参数、Redis、鉴权、限流、飞书、日志等配置。
+
+所有配置项均支持环境变量覆盖，未设置时使用默认值。
+"""
+
 import os
 
 # ── 模型加载 ────────────────────────────────────────────────
@@ -47,9 +52,7 @@ LLAMA_SPEC_DRAFT_N_MAX = int(os.getenv("LLAMA_SPEC_DRAFT_N_MAX", "2"))
 LLM_FALLBACK_TO_CLOUD = os.getenv("LLM_FALLBACK_TO_CLOUD", "1") == "1"
 
 # ── llama.cpp 服务连接 ──────────────────────────────────────
-# llama.cpp server 的 OpenAI 兼容 API 地址
-# 启动 llama-server 后它会暴露一个与 OpenAI 格式兼容的 HTTP 服务
-# /v1 是 API 版本前缀，openai SDK 需要这个路径
+# llama.cpp server 的 OpenAI 兼容 API 地址（/v1 前缀供 openai SDK 使用）
 LLAMA_CPP_BASE_URL = os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:9856/v1")
 
 
@@ -90,7 +93,23 @@ TOKEN_DB_PATH = os.getenv("TOKEN_DB_PATH", "./data/tokens.db")
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "5"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 
+# ── 飞书自建应用 ──────────────────────────────────────────
+# 飞书机器人 App ID / App Secret（从飞书开放平台获取）
+FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+# false 时 FastAPI 正常启动但不连接飞书，方便本地开发调试
+FEISHU_ENABLED = os.getenv("FEISHU_ENABLED", "true").lower() == "true"
+
 # ── 调试 trace ──────────────────────────────────────────────
 # 设为 "1" 时终端实时展示人类可读的 ReAct/REWOO 进度提示
 # trace 数据（含 Thought/Action/Observation 原文）始终写入 Redis
 DEBUG_TRACE = os.getenv("DEBUG_TRACE", "1") == "1"
+
+# ── 文件日志 ────────────────────────────────────────────────
+# 配置则同时输出到终端和文件（RotatingFileHandler 轮转），不配置仅输出终端
+# Docker 部署建议挂载日志目录：docker run -v /var/log/app:/app/data ...
+LOG_FILE = os.getenv("LOG_FILE", "./data/app.log")
+# 单个日志文件最大字节数（默认 10MB），超过后轮转为 .1 .2 ...
+LOG_FILE_MAX_BYTES = int(os.getenv("LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))
+# 保留的历史日志文件份数
+LOG_FILE_BACKUP_COUNT = int(os.getenv("LOG_FILE_BACKUP_COUNT", "5"))

@@ -12,24 +12,20 @@
     这样做的好处：工具调用不需要等 LLM 把整段 Response 说完，
     观察到 Action 就立刻调工具，减少用户等待时间。
 
-流式输出:
-    Final Answer 不提前截断 —— 用 cloud_chat 流式逐 token 输出给用户。
-    on_chunk=None → CLI print(); 否则 → await on_chunk(text) (SSE push)。
+非流式:
+    内部仍流式调用 cloud_chat（不增加等待时间），
+    累积完整输出后一次返回，不再通过 on_chunk 回调输出。
 """
 
 import json
 import re
 import time
-from typing import Awaitable, Callable, Optional
 
+from core.dispatch import dispatch_tool
+from core.trace import TraceLogger
 from llm_client import cloud_chat
 from prompts.react import SYSTEM_PROMPT_REACT
 from tools import tools_prompt_json
-from core.dispatch import dispatch_tool
-from core.trace import TraceLogger
-
-
-OutputCallback = Callable[[str], Awaitable[None]]
 
 
 MAX_STEPS = 5
@@ -94,8 +90,6 @@ async def run_react_loop(
     has_context: bool,
     trace: TraceLogger,
     session_id: str,
-    *,
-    on_chunk: Optional[OutputCallback] = None,
 ) -> str:
     """ReAct 执行器：Thought → Action → Observation 循环。
 
@@ -146,9 +140,7 @@ async def run_react_loop(
                 if chunk["type"] == "text":
                     buffer += chunk["content"]
 
-                    # 增量检测：Action 闭括号一到齐，立即截断流式接收
-                    # 注意：只检测 Action，不检测 Final Answer ——
-                    #   Final Answer 需要流式输出完整内容给用户看，不应提前截断
+                    # Action 闭括号到齐 → 截断流式接收，立即调工具
                     parsed = _try_parse_action(buffer)
                     if parsed:
                         break
@@ -203,11 +195,6 @@ async def run_react_loop(
                 })
                 continue
             final_answer = parsed["final_answer"]
-            # Final Answer 是用户可见的最终输出
-            if on_chunk:
-                await on_chunk(final_answer)
-            else:
-                print(final_answer)
             await trace.log(session_id, step=step, event="react.final_answer",
                             output=final_answer)
             break
@@ -246,14 +233,8 @@ async def run_react_loop(
             async for chunk in cloud_chat(messages):
                 if chunk["type"] == "text":
                     fallback_buffer += chunk["content"]
-                    if on_chunk:
-                        await on_chunk(chunk["content"])
-                    else:
-                        print(chunk["content"], end="", flush=True)
                 elif chunk["type"] == "done":
                     break
-            if not on_chunk:
-                print()
             final_answer = fallback_buffer
 
     return final_answer

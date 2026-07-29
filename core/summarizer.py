@@ -19,9 +19,9 @@
 - 摘要永远在两次请求之间的"安全窗口"执行，无并发写入风险
 """
 
+from config import count_tokens, MAX_TOKEN_THRESHOLD
 from core.memory import MemoryManager
 from llm_client import local_chat
-from config import count_tokens, MAX_TOKEN_THRESHOLD
 from prompts.summarizer import (
     SYSTEM_PROMPT_SUMMARIZER_L1,
     SYSTEM_PROMPT_SUMMARIZER_L2,

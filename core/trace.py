@@ -7,14 +7,16 @@ DEBUG_TRACE=1 时终端打印人类可读进度，原文只在 JSON 日志中保
 Redis 不可用时自动降级为内存 list。
 """
 
-import json
-import time
 import asyncio
-from datetime import datetime, timezone, timedelta
+import json
+import logging
+from datetime import datetime, timedelta, timezone
 
 import redis.asyncio as aioredis
 
-from config import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, DEBUG_TRACE
+from config import DEBUG_TRACE, REDIS_HOST, REDIS_PASSWORD, REDIS_PORT
+
+logger = logging.getLogger(__name__)
 
 TRACE_TTL = 86400       # 24 小时
 RETRY_MAX = 3
@@ -89,7 +91,7 @@ class TraceLogger:
                     await asyncio.sleep(RETRY_DELAY)
                 else:
                     self._redis = None
-                    print("[Trace] Redis 不可用，trace 降级为内存模式（不持久化）")
+                    logger.warning("Redis 不可用，Trace 已降级为内存模式（不持久化）")
 
     async def disconnect(self) -> None:
         """关闭 Redis 连接。"""

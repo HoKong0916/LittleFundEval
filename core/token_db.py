@@ -56,12 +56,14 @@ TokenRow = dict[str, object]
 
 
 def get_token(token: str) -> TokenRow | None:
+    """按 token 主键查询一行记录，返回 dict 或 None。"""
     with _get_conn() as db:
         row = db.execute("SELECT * FROM api_tokens WHERE token = ?", (token,)).fetchone()
         return dict(row) if row else None
 
 
 def touch_last_used(token: str) -> None:
+    """更新 token 的最后使用时间为当前本地时间。"""
     with _get_conn() as db:
         db.execute(
             "UPDATE api_tokens SET last_used = datetime('now', 'localtime') WHERE token = ?",
@@ -72,6 +74,7 @@ def touch_last_used(token: str) -> None:
 
 def create_token(user_id: str, name: str, tier: str = "visitor",
                  expires_at: Optional[str] = None) -> str:
+    """创建新 token 并持久化，返回生成的 token 字符串。"""
     token = f"sk-{user_id}-{uuid.uuid4().hex[:6]}"
     with _get_conn() as db:
         db.execute(
@@ -84,12 +87,14 @@ def create_token(user_id: str, name: str, tier: str = "visitor",
 
 
 def list_tokens() -> list[TokenRow]:
+    """列出所有 token，按创建时间倒序返回。"""
     with _get_conn() as db:
         rows = db.execute("SELECT * FROM api_tokens ORDER BY created_at DESC").fetchall()
         return [dict(r) for r in rows]
 
 
 def revoke_token(token: str) -> bool:
+    """软删除：将 token 标记为已吊销。返回是否命中。"""
     with _get_conn() as db:
         cursor = db.execute("UPDATE api_tokens SET is_revoked = 1 WHERE token = ?", (token,))
         db.commit()
@@ -97,6 +102,7 @@ def revoke_token(token: str) -> bool:
 
 
 def delete_token(token: str) -> bool:
+    """物理删除 token 记录。返回是否命中。"""
     with _get_conn() as db:
         cursor = db.execute("DELETE FROM api_tokens WHERE token = ?", (token,))
         db.commit()

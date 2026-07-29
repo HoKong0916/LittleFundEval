@@ -1,8 +1,9 @@
-"""基金搜索工具 —— 根据关键词从天基金搜索API匹配基金代码和名称。"""
+"""基金搜索工具 —— 根据关键词从天天基金搜索API匹配基金代码和名称。"""
 
 import json
-import httpx
 from datetime import datetime
+
+import httpx
 
 
 async def search_fund(keyword: str) -> str:

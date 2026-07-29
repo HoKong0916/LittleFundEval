@@ -25,17 +25,15 @@
 import asyncio
 import json
 import re
+from datetime import datetime, timedelta
 
 import akshare as ak
 import httpx
-from datetime import datetime, timedelta
 
 from tools.fund_holding import get_fund_holdings
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 持仓文本解析
-# ═══════════════════════════════════════════════════════════════════
+# ── 持仓文本解析 ─────────────────────────────────────────────────
 
 
 def _parse_holdings_text(text: str) -> dict:
@@ -96,9 +94,7 @@ def _parse_holdings_text(text: str) -> dict:
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 资产配置（含兜底推断）
-# ═══════════════════════════════════════════════════════════════════
+# ── 资产配置（含兜底推断）─────────────────────────────────────────
 
 
 def _infer_asset_allocation_by_type(fund_code: str) -> dict:
@@ -148,9 +144,7 @@ def _get_asset_allocation(fund_code: str, date: str) -> dict:
     return _infer_asset_allocation_by_type(fund_code)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 板块实时涨幅
-# ═══════════════════════════════════════════════════════════════════
+# ── 板块实时涨幅 ─────────────────────────────────────────────────
 
 
 async def _fetch_sector_rise(client: httpx.AsyncClient, sectors_list: list[str]) -> list[dict] | None:
@@ -188,9 +182,7 @@ async def _fetch_sector_rise(client: httpx.AsyncClient, sectors_list: list[str])
     return result if result else None
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 适用性检查 & 时效性
-# ═══════════════════════════════════════════════════════════════════
+# ── 适用性检查 & 时效性 ──────────────────────────────────────────
 
 
 def _check_applicability_by_name(fund_name: str) -> str | None:
@@ -288,9 +280,7 @@ def _get_timeliness_note(end_date_str: str) -> str | None:
         return "❌ 持仓数据时效：低（距季报发布 >2个月，持仓可能已显著变化，尤其风格漂移型基金，估算结果参考价值下降）"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 主入口
-# ═══════════════════════════════════════════════════════════════════
+# ── 主入口 ───────────────────────────────────────────────────────
 
 
 async def estimate_fund_nav(fund_code: str) -> str:
@@ -377,16 +367,8 @@ async def estimate_fund_nav(fund_code: str) -> str:
     # ── 时效性提示 ──
     timeliness_note = _get_timeliness_note(end_date)
 
-    # ── 步骤4：执行估算计算 ──
-    # 公式：估算涨幅 = 重仓股加权贡献 + 非重仓股板块代理贡献 + 非股票部分（≈0）
-    #
-    # 重仓股贡献   = Σ(单只占净资产比% × 单只当日涨跌幅%) / 100
-    #   例：中际旭创占比 9.92%，涨 +3.20% → 贡献 9.92×3.20/100 = +0.317%
-    #
-    # 非重仓股贡献 = (股票仓位% - 前十合计占比%) × 板块代理涨幅% / 100
-    #   例：非重仓占 24.7%，板块平均涨 +1.35% → 贡献 24.7×1.35/100 = +0.333%
-    #
-    # 非股票部分   = 债券/现金当日波动极小，近似为 0
+    # ── 步骤4：执行估算（公式见模块顶部 docstring，此处保留数值示例）──
+    # 例：中际旭创占比 9.92% 涨 +3.20% → 贡献 +0.317%；非重仓占 24.7% × 板块涨 +1.35% → +0.333%
     heavy_sum = sum(h["ratio"] * h["change"] for h in holdings)
     heavy_contribution = heavy_sum / 100.0
 
@@ -441,8 +423,8 @@ async def estimate_fund_nav(fund_code: str) -> str:
     lines += [
         f"  重仓股贡献:     {heavy_contribution:+.3f}%",
         f"  非重仓股贡献:   {light_contribution:+.3f}%（非重仓占 {light_ratio:.1f}% × 板块代理 {sector_avg:+.2f}%）",
-        f"  非股票部分:     约 0%（债券/现金波动极小）",
-        f"  ─────────────────────────",
+        "  非股票部分:     约 0%（债券/现金波动极小）",
+        "  ─────────────────────────",
         f"  估算总涨幅:     {total_estimate:+.2f}%",
     ]
 

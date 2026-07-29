@@ -12,13 +12,12 @@ import json
 import re
 
 import httpx
+
 from llm_client import local_chat
 from prompts.capital_inflow import SYSTEM_PROMPT_CAPITAL_INFLOW
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 常量 & 工具函数
-# ═══════════════════════════════════════════════════════════════════
+# ── 常量 & 工具函数 ─────────────────────────────────────────────
 
 _PERIOD_LABEL = {
     "FLOW": "今日",
@@ -35,9 +34,7 @@ def _format_flow(val: float) -> str:
     return f"{sign}{yi:.2f}亿"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 数据抓取
-# ═══════════════════════════════════════════════════════════════════
+# ── 数据抓取 ─────────────────────────────────────────────────────
 
 
 async def _fetch_period(client: httpx.AsyncClient, st: str) -> tuple[str, list[dict]] | None:
@@ -70,9 +67,7 @@ async def _fetch_period(client: httpx.AsyncClient, st: str) -> tuple[str, list[d
     ]
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 板块名匹配
-# ═══════════════════════════════════════════════════════════════════
+# ── 板块名匹配 ───────────────────────────────────────────────────
 
 
 async def _match_sectors(user_sectors: list[str], available_names: list[str]) -> list[str]:
@@ -101,9 +96,7 @@ async def _match_sectors(user_sectors: list[str], available_names: list[str]) ->
         return user_sectors
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 主入口
-# ═══════════════════════════════════════════════════════════════════
+# ── 主入口 ───────────────────────────────────────────────────────
 
 
 async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:

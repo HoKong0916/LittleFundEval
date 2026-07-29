@@ -1,9 +1,12 @@
+"""意图路由 —— 用本地 LLM 将用户问题分类为 DirectAnswer / ReAct / REWOO，并给出所需工具列表。"""
+
 import json
+
 from core.history_formatter import format_history_dialogue
+from core.trace import TraceLogger
 from llm_client import local_chat
 from prompts.router import SYSTEM_PROMPT_ROUTER
 from tools import tools_prompt_json
-from core.trace import TraceLogger
 
 
 async def classify_intent(
@@ -19,7 +22,7 @@ async def classify_intent(
     """
     user_question = user_message[-1]["content"] if user_message else ""
 
-     # 历史扁平化为纯文本，不作为独立 message
+    # 历史扁平化为纯文本，不作为独立 message
     history_text = format_history_dialogue(history, truncate=200) if history else ""
 
     system_prompt = (

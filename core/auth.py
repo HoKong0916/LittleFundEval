@@ -7,9 +7,10 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.token_db import get_token, touch_last_used
 
@@ -56,7 +57,6 @@ async def verify_token(
 
     expires_at = row["expires_at"]
     if expires_at is not None:
-        from datetime import datetime, timezone
         try:
             expiry = datetime.fromisoformat(str(expires_at))
             if datetime.now(timezone.utc).astimezone() > expiry.astimezone():
