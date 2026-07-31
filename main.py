@@ -1,21 +1,8 @@
-"""FastAPI 入口 —— 健康检查 + trace 回溯 + 非流式聊天 + 飞书机器人。
+"""FastAPI 入口 —— /health /trace /chat 端点 + 飞书 WebSocket。
 
-启动:
-    uvicorn main:app --port 8000
-
-端点:
-    GET  /health          — 健康检查
-    GET  /trace/{sid}     — 会话调用链 JSON（Redis 储存 24h TTL）
-    POST /chat            — 非流式 JSON 聊天（Bearer Token 鉴权 + 限流）
-
-鉴权模型:
-    无鉴权 endpoint  →  /health, /trace/{sid}
-    Bearer Token    →  /chat
-    Token 等级: admin (不限流), visitor (滑动窗口 5次/分钟)
-
-飞书通道:
-    通过 WebSocket 长连接接收消息，不走 HTTP 端点。
-    session_id = 飞书 open_id（由 channels/feishu/bot.py 管理）。
+启动: uvicorn main:app --port 8000
+/chat 需 Bearer Token，admin 不限流，visitor 滑动窗口限流。
+飞书走 WebSocket 收消息，session_id = open_id。
 """
 
 import asyncio
@@ -67,20 +54,25 @@ from core.rate_limit import RateLimiter
 from core.trace import TraceLogger
 
 
-# ── 全局实例（lifespan 管理生命周期）──────────────────────────
+# ── 全局实例 ──────────────────────────────────────────────────
+
 trace_logger = TraceLogger()
 memory_manager = MemoryManager()
 rate_limiter = RateLimiter()
 
 
+# ── 应用生命周期 ──────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：连接 Redis → 连接飞书 → 初始化 DB。"""
+    """应用生命周期：连接 Redis → 启动飞书 WebSocket。"""
     await trace_logger.connect()
     await memory_manager.connect()
     await rate_limiter.connect()
+    # 飞书：启动 WebSocket 长连接
     await feishu_bot.start(memory_manager, trace_logger, rate_limiter)
     yield
+    # 飞书：关闭 WebSocket 长连接
     await feishu_bot.stop()
     await trace_logger.disconnect()
     await memory_manager.disconnect()
@@ -90,7 +82,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Little Gambling", lifespan=lifespan)
 
 
-# ── 依赖 ──────────────────────────────────────────────────────
+# ── API 依赖：鉴权 & 限流 ─────────────────────────────────────
 
 async def check_rate_limit(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
     """限流依赖：admin 跳过，visitor 按 token.user_id 限流。"""
@@ -103,7 +95,7 @@ async def check_rate_limit(token_info: TokenInfo = Depends(verify_token)) -> Tok
     return token_info
 
 
-# ── Request / Response Model ──────────────────────────────────
+# ── API 模型 ──────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
@@ -114,7 +106,14 @@ class ChatResponse(BaseModel):
     category: str
 
 
-# ── Trace 端点 ────────────────────────────────────────────────
+# ── API 端点：GET /health ─────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+# ── API 端点：GET /trace/{session_id} ─────────────────────────
 
 @app.get("/trace/{session_id}")
 async def get_trace(session_id: str):
@@ -129,36 +128,14 @@ async def get_trace(session_id: str):
     }
 
 
-# ── 健康检查 ──────────────────────────────────────────────────
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
-# ── 非流式 JSON 聊天 ──────────────────────────────────────────
+# ── API 端点：POST /chat ──────────────────────────────────────
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     body: ChatRequest,
     token_info: TokenInfo = Depends(check_rate_limit),
 ):
-    """非流式 JSON 聊天端点。
-
-    请求:
-        POST /chat
-        Authorization: Bearer sk-xxx
-        {"message": "大摩数字经济混合C 近一个月表现怎么样？"}
-
-    响应:
-        200: {"answer": "...", "category": "REWOO"}
-        400: 消息为空
-        401: 鉴权失败
-        409: 用户处理中
-        429: 限流
-        500: 服务异常
-        504: 推理超时
-    """
+    """非流式 JSON 聊天端点。"""
     message = (body.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message 字段不能为空")
@@ -191,9 +168,9 @@ async def chat(
         await memory_manager.release_session_lock(session_id)
 
 
-# ── 飞书连接状态 ──────────────────────────────────────────────
+# ── 飞书端点：GET /feishu/status ──────────────────────────────
 
 @app.get("/feishu/status")
 async def feishu_status():
     """查询飞书 WebSocket 连接状态。"""
-    return {"connected": feishu_bot.is_connected()}
+    return feishu_bot.get_connection_status()

@@ -7,10 +7,7 @@ import httpx
 
 
 async def search_fund(keyword: str) -> str:
-    """根据关键词搜索基金，返回匹配的基金代码和名称。
-
-    匹配不到时返回语义化提示，引导用户提供更完整的基金名称。
-    """
+    """按关键词搜索基金，返回首个匹配的代码和名称。匹配不到返回提示。"""
     timestamp_ms = int(datetime.now().timestamp() * 1000)
 
     requests_url = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"

@@ -1,14 +1,6 @@
-"""直接回答模式 —— 不调用工具，纯 LLM 知识 + 历史对话综合生成回答。
+"""直接回答模式 —— 不调工具，纯 LLM 知识 + 历史对话综合作答。
 
-适用场景（由 router 判断）:
-    - 投资知识科普（"什么是最大回撤"）
-    - 金融概念解释（"ETF 和 LOF 有什么区别"）
-    - 策略讨论（"如何做资产配置"）
-    - 不涉及实时数据的任何对话
-
-与 ReAct / REWOO 的区别:
-    本模块无工具调用路径，system prompt 中无 tools_json 占位符。
-    内部流式调用 cloud_chat，累积完整输出后一次返回。
+适用场景由 router 判断：投资知识科普、概念解释、策略讨论等不涉及实时数据的对话。
 """
 
 import time
@@ -26,7 +18,7 @@ async def run_direct_answer(
     trace: TraceLogger,
     session_id: str,
 ) -> str:
-    """直接回答模式：不调用工具，直接用 LLM 知识作答（有上下文时综合历史数据）。"""
+    """不调工具，用 LLM 知识作答（有上下文时综合历史数据）。"""
     user_question = user_message[-1]["content"] if user_message else ""
 
     history_text = format_history_dialogue(history) if has_context else "（无历史对话）"

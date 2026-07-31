@@ -1,14 +1,10 @@
-"""飞书消息发送 —— 回复消息到飞书用户（占位消息 + 最终回复 + 错误提示）。
+"""飞书消息发送 —— 回复消息到原消息所在对话。
 
-所有函数内部均捕获异常，飞书 API 调用失败时打日志但不抛异常。
-确保消息发送失败不会导致 robot 进程崩溃。
+异常全部捕获打日志，发送失败不抛异常避免进程崩溃。
 
-【关键】lark_oapi 的导入必须延迟到函数内部！
-    lark_oapi/__init__.py 顶层有 `from . import ws`，会在首次 import 时
-    执行 lark_oapi/ws/client.py 的模块级 `loop = asyncio.get_event_loop()`，
-    将 event loop 绑定到导入时所在线程。如果在主线程（uvicorn）顶层导入，
-    loop 会被绑定到主线程，导致 daemon 线程中 WebSocket 连接失败
-    （"coroutine 'Client._connect' was never awaited"）。
+lark_oapi 必须延迟导入：SDK 顶层会执行 `loop = asyncio.get_event_loop()`，
+主线程先 import 会绑死 loop，daemon 线程 WebSocket 连接就报
+"coroutine 'Client._connect' was never awaited"。详见 bot.py 模块 docstring。
 """
 
 import json
@@ -24,45 +20,37 @@ _MAX_CONTENT_LENGTH = 9000
 
 def _build_client():
     """构建飞书 SDK Client 实例（HTTP 客户端，非 WebSocket）。"""
-    from lark_oapi import Client  # 延迟导入，避免主线程绑定 event loop
-    return Client.builder() \
-        .app_id(FEISHU_APP_ID) \
-        .app_secret(FEISHU_APP_SECRET) \
+    import lark_oapi as lark  # 延迟导入，避免主线程绑定 event loop
+    return (
+        lark.Client.builder()
+        .app_id(FEISHU_APP_ID)
+        .app_secret(FEISHU_APP_SECRET)
         .build()
-
-
-async def send_reply(user_id: str, content: str, msg_id: str) -> None:
-    """回复消息到飞书用户。
-
-    Args:
-        user_id: 接收者的 open_id
-        content: 回复文本内容，超过 9000 字符时自动截断并追加提示
-        msg_id: 用户原消息的 message_id，用于关联到对话线程下
-    """
-    from lark_oapi.api.im.v1 import (  # 延迟导入，避免主线程绑定 event loop
-        ReplyMessageRequestBody,
-        ReplyMessageRequest,
-        ReplyMessageResponse,
     )
+
+
+async def send_reply(content: str, msg_id: str) -> None:
+    """回复消息到指定 msg_id 的对话。超 9000 字符截断。"""
+    import lark_oapi as lark  # 延迟导入，避免主线程绑定 event loop
 
     if len(content) > _MAX_CONTENT_LENGTH:
         content = content[:_MAX_CONTENT_LENGTH] + "\n…(内容过长已截断)"
 
     client = _build_client()
-    # 飞书 msg_type=text 时，content 必须是 JSON 字符串: {"text": "实际内容"}
-    body = ReplyMessageRequestBody()
-    body.content = json.dumps({"text": content}, ensure_ascii=False)
-    body.msg_type = "text"
     request = (
-        ReplyMessageRequest.builder()
+        lark.im.v1.ReplyMessageRequest.builder()
         .message_id(msg_id)
-        .request_body(body)
+        .request_body(
+            lark.im.v1.ReplyMessageRequestBody.builder()
+            .content(json.dumps({"text": content}, ensure_ascii=False))
+            .msg_type("text")
+            .build()
+        )
         .build()
     )
 
     try:
-        # areply 是 async 版本（reply 是同步版本，不能 await）
-        response: ReplyMessageResponse = await client.im.v1.message.areply(request)
+        response = await client.im.v1.message.areply(request)
         if not response.success():
             logger.error(
                 "飞书回复消息失败: code=%s msg=%s log_id=%s",
@@ -72,9 +60,3 @@ async def send_reply(user_id: str, content: str, msg_id: str) -> None:
         logger.exception("飞书回复消息异常，跳过不崩溃")
 
 
-async def send_error(user_id: str, msg_id: str, reason: str) -> None:
-    """发送错误提示（限流/超时/异常等场景）。
-
-    reason 会作为消息正文发送给用户。
-    """
-    await send_reply(user_id, reason, msg_id)

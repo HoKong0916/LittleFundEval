@@ -1,6 +1,4 @@
-"""历史对话格式化工具。
-把 `history: list[dict]`（role + content）转成 LLM 可直接用的纯文本上下文。
-"""
+"""历史对话格式化 —— role/content dict 列表转 LLM 可用的纯文本。"""
 
 
 def format_history_dialogue(
@@ -27,7 +25,7 @@ def format_history_dialogue(
 
 
 def format_history_assistant_only(history: list[dict]) -> str:
-    """只提取历史中助手的回复内容（去标签），用于综合已有数据。"""
+    """只提取历史中助手的回复内容（去 role 标签）。"""
     if not history:
         return ""
     lines: list[str] = []

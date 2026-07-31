@@ -1,10 +1,6 @@
-"""快速话题相关性检测 —— 字符级关键词重叠 + LLM 兜底。
+"""话题相关性检测 —— 中文 bigram + 基金代码 Jaccard 相似度，模糊区间走 LLM 兜底。
 
-策略：
-  1. 提取中文 bigram + 6 位基金代码作为特征集合
-  2. 计算 Jaccard 相似度
-  3. >0.25 → 直接返回 True（明确相关）
-     其余 → fallback 本地 LLM（由 LLM 做语义兜底，防止"上述两个板块"类指代表达被 Jaccard 误杀）
+>0.25 直接判同话题；其余交 LLM 防止"上述板块"类指代表达被误杀。
 """
 
 import re
@@ -30,10 +26,7 @@ def _features(text: str) -> set[str]:
 
 
 async def is_same_topic(current: str, history: list[dict]) -> bool:
-    """判断当前问题与历史对话是否属于同一话题（追问 / 对比 / 细化）。
-
-    无历史时返回 False。
-    """
+    """当前问题与历史是否同话题（追问/对比/细化）。无历史返回 False。"""
     if not history:
         return False
 
@@ -74,6 +67,6 @@ async def is_same_topic(current: str, history: list[dict]) -> bool:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": current[:600]},
         ], temperature=0.0)
-        return result is not None and "YES" in result.strip().upper()
+        return result != None and "YES" in result.strip().upper()
     except Exception:
         return True  # LLM 不可用，保守保留

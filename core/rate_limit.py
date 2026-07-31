@@ -1,14 +1,6 @@
-"""滑动窗口限流器 —— Redis Sorted Set 实现，admin 跳过。
+"""滑动窗口限流器 —— Redis Sorted Set 实现。
 
-用法:
-    rate_limiter = RateLimiter()
-    await rate_limiter.connect()       # lifespan startup
-    ...
-    # API 通道 —— 按 TokenInfo（admin 不限流，visitor 5次/分钟）
-    allowed, retry = await rate_limiter.check(token_info)
-    # 飞书通道 —— 按用户 open_id（5次/分钟）
-    allowed, retry = await rate_limiter.check_by_user_id(open_id)
-    await rate_limiter.disconnect()    # lifespan shutdown
+API 通道按 token（admin 不限流），飞书通道按 open_id。
 """
 
 import asyncio
@@ -33,11 +25,7 @@ RETRY_DELAY = 1.0
 
 
 class RateLimiter:
-    """滑动窗口限流器。
-
-    算法: ZREMRANGEBYSCORE + ZCARD + ZADD + EXPIRE 管道执行（4 条命令原子化）。
-    Redis 不可用时降级放行。
-    """
+    """滑动窗口限流器。ZSET 管道 4 条命令原子执行，Redis 不可用降级放行。"""
 
     def __init__(self):
         self._redis: aioredis.Redis | None = None
@@ -69,34 +57,22 @@ class RateLimiter:
 
     @property
     def _connected(self) -> bool:
-        return self._redis is not None
+        return self._redis != None
 
     # ── 限流检查 ──────────────────────────────────────────────
 
     async def check(self, token_info: TokenInfo) -> tuple[bool, int]:
-        """检查 TokenInfo 是否放行。返回 (放行?, Retry-After 秒数)。
-
-        admin 直接放行，API 通道使用此方法。
-        """
+        """API 通道：admin 放行，visitor 按 token 限流。"""
         if token_info.tier == "admin":
             return True, 0
-        return await self._sliding_window_check(f"ratelimit:token:{token_info.token}")
+        return await self._sliding_window_check(f"lg:ratelimit:token:{token_info.token}")
 
     async def check_by_user_id(self, user_id: str) -> tuple[bool, int]:
-        """按用户 ID 检查是否放行。返回 (放行?, Retry-After 秒数)。
-
-        飞书通道使用此方法，按 open_id 限流 5 次/分钟。
-        Key 格式: ratelimit:{open_id}（与 session:{open_id}:... 风格统一）
-        """
-        return await self._sliding_window_check(f"ratelimit:{user_id}")
+        """飞书通道：按 open_id 限流，key 为 lg:ratelimit:user:{open_id}。"""
+        return await self._sliding_window_check(f"lg:ratelimit:user:{user_id}")
 
     async def _sliding_window_check(self, key: str) -> tuple[bool, int]:
-        """滑动窗口日志算法核心，按给定 Redis key 限流。
-
-        key 由调用方拼接前缀区分通路：ratelimit:token:xxx（API）、ratelimit:{open_id}（飞书）。
-
-        Redis 不可用时降级放行（不阻塞业务）。
-        """
+        """滑动窗口核心：ZREMRANGEBYSCORE + ZCARD + ZADD + EXPIRE 管道执行。"""
         if not self._connected:
             return True, 0
 

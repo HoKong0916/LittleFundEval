@@ -27,7 +27,7 @@ _model_name: str | None = None
 async def _get_model_name() -> str:
     """惰性获取并缓存 llama-server 首个模型 ID，避免每次请求重复拉取模型列表。"""
     global _model_name
-    if _model_name is None:
+    if _model_name == None:
         models = await _client.models.list()
         _model_name = models.data[0].id
     return _model_name

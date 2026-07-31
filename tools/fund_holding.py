@@ -1,6 +1,9 @@
-"""基金持仓查询工具 —— 抓取天天基金前十重仓股、主攻板块、截止日期。
+"""基金持仓 —— 前十重仓股、主攻板块、截止日期。
 
-涨跌幅通过东方财富实时行情 API 批量查询，替换页面 HTML 中的静态（昨日）数据。
+涨跌幅用腾讯实时行情 API 批量替换页面 HTML 的静态昨日数据。
+
+内部两层：_fetch_holdings_data（结构化 dict）→ get_fund_holdings（格式化文本）。
+其他工具可直接调 _fetch_holdings_data 避免文本往返。
 """
 
 import re
@@ -9,58 +12,77 @@ import httpx
 from bs4 import BeautifulSoup
 
 
-async def _fetch_realtime_quotes(client: httpx.AsyncClient, codes: list[str]) -> dict[str, dict]:
-    """批量获取 A 股实时行情（涨跌幅、股票名称）。
+def _to_tencent_code(page_code: str) -> str:
+    """页面 secid → 腾讯行情代码。0.300308 → sz300308, 1.688167 → sh688167。"""
+    parts = page_code.split(".")
+    if len(parts) == 2:
+        prefix = "sh" if parts[0] == "1" else "sz"
+        return f"{prefix}{parts[1]}"
+    return page_code
 
-    API: push2.eastmoney.com — 单次请求最多 ~50 只，按 50 分批。
-    codes 已是页面提取的 secid 格式（如 "0.300308" / "1.688167"），无需再转换。
-    返回 {code: {"change_pct": float, "name": str}, ...}。
-    失败返回空 dict，调用方用页面原始数据兜底。
+
+async def _fetch_realtime_quotes(
+    client: httpx.AsyncClient, codes: list[str]
+) -> dict[str, dict]:
+    """批量拉 A 股实时行情（腾讯 qt.gtimg.cn，不限频）。一次请求全量。
+
+    返回 {numeric_code: {change_pct, name}}，失败返回空 dict。
     """
     if not codes:
         return {}
 
+    tcodes = [_to_tencent_code(c) for c in codes]
+    url = f"http://qt.gtimg.cn/q={','.join(tcodes)}"
+
+    try:
+        resp = await client.get(url)
+        resp.encoding = "gbk"
+    except Exception:
+        return {}
+
     all_quotes: dict[str, dict] = {}
-    batch_size = 50
-
-    for i in range(0, len(codes), batch_size):
-        batch = codes[i : i + batch_size]
-        secids = ",".join(batch)
-        url = (
-            f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&fields=f3,f12,f14&secids={secids}"
-        )
+    for line in resp.text.strip().split("\n"):
+        if not line.strip() or "=" not in line:
+            continue
+        # v_sz300308="51~中际旭创~300308~902.01~864.00~..."
         try:
-            resp = await client.get(url)
-            data = resp.json()
-        except Exception:
+            content = line.split('"', 2)[1]
+        except IndexError:
             continue
-
-        if not data or data.get("data") is None:
+        fields = content.split("~")
+        if len(fields) < 33:
             continue
-
-        for item in data["data"].get("diff", []) or []:
-            code = item.get("f12", "")
-            if not code:
-                continue
-            try:
-                change_pct = float(item.get("f3", 0) or 0)
-            except (ValueError, TypeError):
-                change_pct = 0.0
-
-            all_quotes[code] = {
-                "change_pct": change_pct,
-                "name": item.get("f14", ""),
-            }
+        try:
+            # fields[3]=当前价, fields[32]=涨跌幅%
+            code = fields[2]
+            change_pct = float(fields[32])
+        except (ValueError, IndexError):
+            continue
+        all_quotes[str(code)] = {
+            "change_pct": change_pct,
+            "name": fields[1],
+        }
 
     return all_quotes
 
 
-async def get_fund_holdings(fund_code: str) -> str:
-    """获取基金前十持仓信息，返回格式化文本。
+async def _fetch_holdings_data(fund_code: str) -> dict:
+    """拉取并解析基金持仓数据，返回结构化 dict。失败时 raise。
 
-    涨跌幅替换为东方财富实时行情（API 失败时回退到页面 HTML 原始数据）。
+    返回格式::
+
+        {
+            "fund_code": "002112",
+            "fund_name": "德邦鑫星价值灵活配置混合C",
+            "theme_tags": ["光模块"],
+            "end_date": "2025-06-30",
+            "total_ratio": 71.23,
+            "holdings": [
+                {"name": "中际旭创", "code": "0.300308", "ratio": 9.92, "change": 13.20},
+                ...
+            ],
+        }
     """
-
     requests_url = f"https://fund.eastmoney.com/{fund_code}.html?spm=search"
 
     async with httpx.AsyncClient(
@@ -77,7 +99,6 @@ async def get_fund_holdings(fund_code: str) -> str:
     # ── 基金名称 ──
     title_el = soup.select_one(".fundDetail-tit")
     fund_name = title_el.get_text(strip=True) if title_el else ""
-    # 去掉末尾的基金代码括号，如 "德邦鑫星价值灵活配置混合C(002112)"
     fund_name = re.sub(r"\(\d+\)$", "", fund_name)
 
     # ── 投资方向（主题标签）──
@@ -97,11 +118,11 @@ async def get_fund_holdings(fund_code: str) -> str:
     # ── 持仓表格 ──
     table_wrap = soup.find("div", class_="poptableWrap")
     if not table_wrap:
-        return f"基金代码: {fund_code}\n错误: 未找到持仓数据"
+        raise ValueError("未找到持仓数据")
 
     table = table_wrap.find("table", class_="ui-table-hover")
     if not table:
-        return f"基金代码: {fund_code}\n错误: 未找到持仓表格"
+        raise ValueError("未找到持仓表格")
 
     # 第一遍：收集股票代码和页面原始涨跌（兜底用）
     stock_entries: list[dict] = []
@@ -115,14 +136,20 @@ async def get_fund_holdings(fund_code: str) -> str:
             continue
         stock_name = a_tag.get("title", "") or a_tag.get_text(strip=True)
         href = a_tag.get("href", "")
-        # 页面 href 格式: //quote.eastmoney.com/unify/r/0.300308
-        # 取最后一个路径段即为 secid（如 "0.300308" / "1.688167"）
         stock_code = href.rstrip("/").split("/")[-1] if href else ""
 
-        ratio = tds[1].get_text(strip=True)
+        ratio_str = tds[1].get_text(strip=True)
+        try:
+            ratio = float(ratio_str.replace("%", ""))
+        except (ValueError, AttributeError):
+            ratio = 0.0
 
         change_span = tds[2].find("span")
-        page_change = change_span.get_text(strip=True) if change_span else tds[2].get_text(strip=True)
+        page_change_str = change_span.get_text(strip=True) if change_span else tds[2].get_text(strip=True)
+        try:
+            page_change = float(page_change_str.replace("%", ""))
+        except (ValueError, AttributeError):
+            page_change = 0.0
 
         stock_entries.append({
             "name": stock_name,
@@ -132,7 +159,7 @@ async def get_fund_holdings(fund_code: str) -> str:
         })
 
     if not stock_entries:
-        return f"基金代码: {fund_code}\n错误: 未解析到任何持仓记录"
+        raise ValueError("未解析到任何持仓记录")
 
     # ── 批量获取实时行情，替换页面静态涨跌幅 ──
     all_codes = [e["code"] for e in stock_entries if e["code"]]
@@ -147,37 +174,60 @@ async def get_fund_holdings(fund_code: str) -> str:
         ) as client:
             realtime_quotes = await _fetch_realtime_quotes(client, all_codes)
 
-    # 如果实时行情全部失败，用页面原始数据兜底
-    holdings: list[str] = []
+    # 组装最终的 holdings 列表
+    holdings: list[dict] = []
     for entry in stock_entries:
         page_code = entry["code"]
-        # 页面 code 格式为 "0.300308" / "1.688167"，API 返回的 key 是纯数字 "300308" / "688167"
         numeric_code = page_code.split(".")[-1] if "." in page_code else page_code
         rt = realtime_quotes.get(numeric_code) if numeric_code else None
-        if rt:
-            change = f"{rt['change_pct']:+.2f}%"
-        else:
-            change = entry["page_change"]  # 回退到页面原始数据
+        change = rt["change_pct"] if rt else entry["page_change"]
 
-        holdings.append(
-            f"  {entry['name']}({page_code})  占比 {entry['ratio']}  涨跌 {change}"
-        )
+        holdings.append({
+            "name": entry["name"],
+            "code": page_code,
+            "ratio": entry["ratio"],
+            "change": change,
+        })
 
     # ── 前十持仓占比合计 ──
     total_el = table_wrap.find("span", class_="sum-num")
-    total_ratio = total_el.get_text(strip=True) if total_el else ""
+    total_ratio = 0.0
+    if total_el:
+        total_str = total_el.get_text(strip=True)
+        try:
+            total_ratio = float(total_str.replace("%", ""))
+        except (ValueError, AttributeError):
+            total_ratio = 0.0
 
-    # ── 格式化输出 ──
+    return {
+        "fund_code": fund_code,
+        "fund_name": fund_name,
+        "theme_tags": theme_tags,
+        "end_date": end_date,
+        "total_ratio": total_ratio,
+        "holdings": holdings,
+    }
+
+
+async def get_fund_holdings(fund_code: str) -> str:
+    """获取基金持仓（格式化文本输出，供 LLM 阅读）。"""
+    try:
+        data = await _fetch_holdings_data(fund_code)
+    except Exception as e:
+        return f"基金代码: {fund_code}\n错误: {e}"
+
     lines = [
-        f"基金代码: {fund_code}",
-        f"基金名称: {fund_name}",
-        f"主攻板块方向: {'、'.join(theme_tags)}" if theme_tags else None,
-        f"截止日期: {end_date}",
+        f"基金代码: {data['fund_code']}",
+        f"基金名称: {data['fund_name']}",
     ]
-    lines += [
-        "",
-        "━━━ 前十持仓 ━━━",
-        *holdings,
-        f"  前十股票持仓占比合计: {total_ratio}",
-    ]
-    return "\n".join(line for line in lines if line is not None)
+    if data["theme_tags"]:
+        lines.append(f"主攻板块方向: {'、'.join(data['theme_tags'])}")
+    lines.append(f"截止日期: {data['end_date']}")
+    lines.append("")
+    lines.append("━━━ 前十持仓 ━━━")
+    for h in data["holdings"]:
+        lines.append(
+            f"  {h['name']}({h['code']})  占比 {h['ratio']:.2f}%  涨跌 {h['change']:+.2f}%"
+        )
+    lines.append(f"  前十股票持仓占比合计: {data['total_ratio']:.2f}%")
+    return "\n".join(lines)

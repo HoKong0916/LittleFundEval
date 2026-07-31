@@ -1,8 +1,6 @@
 """topic.py 专用 prompt —— 话题相关性判断（追问 / 对比 / 细化 vs 平行跳转）。
 
-与 core/topic.py 的快速路径（Jaccard 相似度）配合：
-- Jaccard > 0.25 → 直接 True，不经过本 prompt
-- 其余所有情况 → 使用本 prompt 让 LLM 做语义兜底
+core/topic.py 先算 Jaccard 相似度：>0.25 直接判同话题，其余交本 prompt 做 LLM 兜底。
 """
 
 SYSTEM_PROMPT_TOPIC = """

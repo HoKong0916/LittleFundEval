@@ -1,20 +1,7 @@
 """ReAct 执行器 —— Thought → Action → Observation 循环。
 
-流程:
-    1. LLM 输出 "Thought: ... Action: tool_name(param=val)"
-    2. 增量检测到闭括号 → 截断流，dispatch 执行工具
-    3. "Observation: <工具结果>" 追加到对话 → 下一轮循环
-    4. 最多 MAX_STEPS 步，超限强制要求总结
-
-增量解析:
-    _try_parse_action 每次收到 chunk 就检查 Action 是否完整。
-    只在 Action 闭括号到达时截断，不截断 Final Answer。
-    这样做的好处：工具调用不需要等 LLM 把整段 Response 说完，
-    观察到 Action 就立刻调工具，减少用户等待时间。
-
-非流式:
-    内部仍流式调用 cloud_chat（不增加等待时间），
-    累积完整输出后一次返回，不再通过 on_chunk 回调输出。
+增量解析 Action 闭括号，一到就截断流式输出立即调工具，不等 LLM 把整段 Response 说完。
+Final Answer 路径不截断，累积完整 buffer 后返回。
 """
 
 import json
@@ -91,11 +78,7 @@ async def run_react_loop(
     trace: TraceLogger,
     session_id: str,
 ) -> str:
-    """ReAct 执行器：Thought → Action → Observation 循环。
-
-    Thought/Action/Observation 原文仅写入 trace JSON 日志，
-    终端只展示人类可读的进度提示（DEBUG_TRACE=1 时）。
-    """
+    """ReAct 主循环。最多 MAX_STEPS 步，超限强制总结。"""
     user_question = user_message[-1]["content"] if user_message else ""
     system_prompt = (
         SYSTEM_PROMPT_REACT
@@ -166,7 +149,7 @@ async def run_react_loop(
 
         # 兜底：流正常结束（非截断），用完整 buffer 做一次全量解析
         # 处理场景：Final Answer、格式不规范但包含 Action 的输出
-        if parsed is None:
+        if parsed == None:
             parsed = parse_step(buffer)
 
         # 记录 LLM 调用 trace（buffer 中含完整的 Thought/Action/Final Answer 原文）

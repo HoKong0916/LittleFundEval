@@ -1,11 +1,11 @@
-"""会话记忆层 —— 基于 Redis 的短期对话上下文管理。
+"""会话短期记忆 —— Redis List 存对话，Hash 存元数据，String 存摘要标记。
 
-Key 结构：
-    session:{id}:messages      →  List（用户 ↔ 助手对话，LTRIM 保持最近 10 条）
-    session:{id}:meta          →  Hash（最后活跃时间）
-    session:{id}:needs_summary →  String（摘要标记，N 轮结束打标，N+1 轮启动时 GETDEL 原子消费）
+Key 结构:
+    lg:session:{id}:messages      List    对话记录（LTRIM 保留最近 50 条）
+    lg:session:{id}:meta          Hash    最后活跃时间
+    lg:session:{id}:needs_summary String  摘要标记（N 轮打标，N+1 轮 GETDEL 原子消费）
 
-Redis 不可用时自动降级为内存 dict。
+Redis 不可用时降级为内存 dict。
 """
 
 import asyncio
@@ -26,19 +26,7 @@ RETRY_MAX = 3              # 连接重试次数
 RETRY_DELAY = 1.0          # 重试间隔（秒）
 
 class MemoryManager:
-    """会话短期记忆管理器。
-
-    用法 —— CLI（async with 自动管理连接）:
-        async with MemoryManager() as mem:
-            history = await mem.load_messages(sid)
-            await mem.append_message(sid, msg)
-
-    用法 —— FastAPI（手动生命周期）:
-        mem = MemoryManager()
-        await mem.connect()       # startup 事件
-        ...
-        await mem.disconnect()    # shutdown 事件
-    """
+    """会话短期记忆管理器。支持 async with 或手动 connect/disconnect。"""
 
     def __init__(self):
         self._redis: aioredis.Redis | None = None
@@ -47,7 +35,7 @@ class MemoryManager:
     # ── 生命周期 ──────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """建立 Redis 连接。失败则启用内存降级，不抛异常。"""
+        """建立 Redis 连接，失败降级为内存模式。"""
         url = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
         kwargs = {"decode_responses": False}
         if REDIS_PASSWORD:
@@ -82,19 +70,19 @@ class MemoryManager:
 
     @property
     def _connected(self) -> bool:
-        return self._redis is not None
+        return self._redis != None
 
     @staticmethod
     def _msg_key(session_id: str) -> str:
-        return f"session:{session_id}:messages"
+        return f"lg:session:{session_id}:messages"
 
     @staticmethod
     def _meta_key(session_id: str) -> str:
-        return f"session:{session_id}:meta"
+        return f"lg:session:{session_id}:meta"
 
     @staticmethod
     def _summary_flag_key(session_id: str) -> str:
-        return f"session:{session_id}:needs_summary"
+        return f"lg:session:{session_id}:needs_summary"
 
     # ── 摘要标记 ──────────────────────────────────────────────
 
@@ -108,16 +96,13 @@ class MemoryManager:
                 self._redis = None
 
     async def check_and_clear_summary_flag(self, session_id: str) -> bool:
-        """N+1 轮开始时检查标记。GETDEL 原子操作：读取并删除，只有一人能拿到 True。
-
-        返回 True 表示需要先执行摘要再加载历史。
-        """
+        """GETDEL 原子读取并清除摘要标记。返回 True 表示需要先摘要再加载历史。"""
         if not self._connected:
             return False
         key = self._summary_flag_key(session_id)
         try:
             result = await self._redis.getdel(key)
-            return result is not None
+            return result != None
         except Exception:
             self._redis = None
             return False
@@ -134,7 +119,7 @@ class MemoryManager:
         return [json.loads(m) for m in raw]
 
     async def append_message(self, session_id: str, msg: dict) -> None:
-        """追加一条消息，自动裁剪窗口 + 刷新 TTL + 更新元数据。"""
+        """追加消息，自动裁剪窗口、刷新 TTL、更新元数据。"""
         msg.setdefault("_v", 1)
         data = json.dumps(msg, ensure_ascii=False)
 
@@ -173,22 +158,10 @@ class MemoryManager:
     # ── 会话锁（并发写入保护）────────────────────────────────
 
     async def acquire_session_lock(self, session_id: str, ttl: int = 60) -> bool:
-        """获取会话处理锁。获取到 → True，已被占用 → False。
-
-        使用场景:
-            FastAPI /chat/stream 端点。同 session_id 的请求必须串行处理，
-            否则并发 append_message 会导致 Redis List 中消息乱序甚至丢失。
-
-        实现:
-            Redis `SET key value NX EX ttl`（redis-py 封装为 nx=True, ex=ttl）。
-            NX = 仅当 key 不存在时才写入 → 原子性"抢锁"。
-            EX = 锁自动过期，防止进程崩溃后锁永不释放。
-
-        Redis 不可用时降级放行（不阻塞请求，并发问题靠单进程 asyncio 消解）。
-        """
+        """SET NX EX 抢锁。成功 True，已被占用 False。Redis 不可用时降级放行。"""
         if not self._connected:
             return True
-        key = f"session:{session_id}:lock"
+        key = f"lg:session:{session_id}:lock"
         try:
             return await self._redis.set(key, "1", nx=True, ex=ttl)
         except Exception:
@@ -196,33 +169,11 @@ class MemoryManager:
             return True
 
     async def release_session_lock(self, session_id: str) -> None:
-        """释放会话处理锁。
-
-        正常流程在 runner() 的 finally 块中调用，确保即使 run_chat 抛异常也会释放锁。
-        """
+        """释放会话锁。应在 finally 块调用确保异常也释放。"""
         if self._connected:
-            key = f"session:{session_id}:lock"
+            key = f"lg:session:{session_id}:lock"
             try:
                 await self._redis.delete(key)
             except Exception:
                 self._redis = None
 
-    # ── 元数据 ────────────────────────────────────────────────
-
-    async def get_meta(self, session_id: str) -> dict:
-        """获取会话元数据（创建时间、最后活跃时间等）。"""
-        if not self._connected:
-            return {}
-        meta = await self._redis.hgetall(self._meta_key(session_id))
-        return {k.decode(): v.decode() for k, v in meta.items()}
-
-    async def delete_session(self, session_id: str) -> None:
-        """删除整个会话的消息和元数据。"""
-        if self._connected:
-            await self._redis.delete(
-                self._msg_key(session_id),
-                self._meta_key(session_id),
-                self._summary_flag_key(session_id),
-            )
-        else:
-            self._fallback.pop(session_id, None)

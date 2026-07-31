@@ -1,22 +1,8 @@
-"""对话摘要引擎 —— 在 token 超出阈值时从旧→新压缩助手回答。
+"""对话摘要引擎 —— token 超阈值时从旧→新渐进压缩助手回答。
 
-由调用方在 N+1 轮开始时同步调用（await），不在 N 轮结束时 fire-and-forget：
-
-    N 轮结束:  memory.set_summary_flag(sid)       # 只打标记
-    N+1 轮开始: if memory.check_and_clear_summary_flag(sid):  # GETDEL 原子
-                   await summarize_session(memory, sid)       # 同步执行
-               history = await memory.load_messages(sid)      # 再加载历史
-
-渐进分层摘要（金字塔）：
-- L0 = 原文（近期）
-- L1 = 3-5 句摘要（中期）
-- L2 = 一句话（远期）
-- L3 = 一行关键结论（最远期）
-- 每条消息始终从原文压缩，prompt 控制粒度，不链式叠加
-- _original 保留至消息到达 L3 后才删除，确保跨会话升级压缩时始终有源文可用
-- 每轮遍历从旧→新，越旧的消息自然经历越多轮压缩
-- 所有层都用完后 token 仍超阈值 → 从最旧消息开始截断
-- 摘要永远在两次请求之间的"安全窗口"执行，无并发写入风险
+金字塔分层：L0 原文 → L1 三五句 → L2 一句话 → L3 关键结论。
+每条消息从原文压缩，不链式叠加；_original 保留到 L3 后才删除。
+摘要只在 N+1 轮开始的"安全窗口"执行（N 轮结束仅打标），无并发写入风险。
 """
 
 from config import count_tokens, MAX_TOKEN_THRESHOLD
@@ -48,14 +34,7 @@ async def _summarize_one(content: str, layer: int) -> str:
 
 
 async def summarize_session(memory: MemoryManager, session_id: str) -> None:
-    """入口：加载会话消息 → 多轮分层压缩 → 写回。
-
-    顶层捕获所有异常，确保以 fire-and-forget（create_task）方式调用时
-    不会因 Redis 断连 / LLM 错误等原因泄露 "Task exception was never retrieved"。
-
-    CLI 场景建议直接 await，确保摘要完成后再退出 async with 块；
-    FastAPI 多用户场景用 create_task 即可，本函数的 try/except 保证安全。
-    """
+    """加载消息 → 多轮分层压缩 → 写回。顶层捕获所有异常，fire-and-forget 调用也安全。"""
     try:
         messages = await memory.load_messages(session_id)
     except Exception:

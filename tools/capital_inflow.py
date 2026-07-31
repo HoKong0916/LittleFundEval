@@ -123,7 +123,7 @@ async def capital_inflow_in_sectors(sectors: list[str] | None = None) -> str:
             return_exceptions=True,
         )
         for result in results:
-            if result is not None:
+            if result != None:
                 st, data = result
                 period_data[st] = data
 

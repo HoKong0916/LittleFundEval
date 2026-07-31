@@ -138,10 +138,6 @@ TOOLS_MAP: dict = {
 
 
 def tools_prompt_json(indent: int = 2) -> str:
-    """返回扁平化的工具列表 JSON 字符串，用于嵌入 system prompt。
-
-    OpenAI/DeepSeek API 格式为 {"type":"function","function":{...}}，
-    prompt 中只需要 function 对象本身。
-    """
+    """返回扁平化的工具列表 JSON，供 system prompt 嵌入。剥离外层 type 包装只留 function 对象。"""
     flat = [t["function"] for t in TOOLS_SCHEMA]
     return json.dumps(flat, ensure_ascii=False, indent=indent)

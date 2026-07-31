@@ -1,46 +1,17 @@
-"""飞书 WebSocket 长连接管理 + 消息处理入口。
+"""飞书 WebSocket 长连接 + 消息处理入口。
 
-对外接口:
-    start()           — 初始化 lark SDK client，启动长连接后台任务
-    stop()            — 优雅关闭长连接
-    is_connected()    — 飞书连接状态查询
+对外接口：start() / stop() / is_connected()
+SDK 内置 auto_reconnect，start() 跑在 daemon 线程（同步阻塞），进程退出自动终止。
 
-内部流程（收到消息后）:
-    1. 提取 open_id, msg_id, 文本内容, create_time
-    2. 时效检查: create_time 距今 > 5 分钟 → 回复"消息延迟到达" → 结束
-       （WebSocket 断线重连后飞书服务端会补投积压消息，此时已无意义）
-    3. 限流: check_by_user_id(open_id)
-       |- 超限 → 回复"请求太频繁" → 结束
-       |- 放行 → 继续
-    4. 取消该用户上一个推理任务（如有），确保始终回答最新问题
-    5. 异步 agent（_run_agent）:
-       session_id = open_id
-       asyncio.create_task(_run_agent(...))
-         |
-         v (后台执行)
-       占位回复 → run_chat 管道 → 路由 → Agent → answer
-         |
-         v
-       回复结果: send_reply(answer, msg_id)
-
-    用户连发消息时，新消息自动取消旧任务，旧任务静默退出不回复。
-
-断连重连:
-    lark-oapi SDK 内置 auto_reconnect，无需本模块自行管理。
-    启动时在独立线程中运行 ws_client.start()（同步阻塞），
-    进程退出时 daemon 线程自动终止。
+收到消息后：去重 → 时效检查（>5min 拒绝）→ 限流 → 取消该用户旧任务 → 异步推理。
+用户连发消息时新消息取消旧任务，旧任务静默退出不回复。
 
 Event loop 绑定问题（已修复）:
-    lark_oapi/__init__.py 顶层 `from . import ws` 会导致
-    lark_oapi/ws/client.py 在首次导入时执行模块级
-    `loop = asyncio.get_event_loop()`，将 loop 绑定到导入时所在线程。
-    如果绑定到主线程（uvicorn），daemon 线程中 start() 会因
-    "This event loop is already running" 失败，_connect() 协程未被 await，
-    触发 "coroutine 'Client._connect' was never awaited"。
-
-    修复方案（双保险）:
-    1. reply.py 延迟导入 lark_oapi，避免主线程触发包加载
-    2. _run_ws() 导入后 monkey-patch lark_oapi.ws.client.loop 为 daemon 线程的 loop
+    lark_oapi/ws/client.py 顶层执行 `loop = asyncio.get_event_loop()`，
+    首次 import 时绑定到所在线程。若主线程先 import，daemon 线程调 start() 会报
+    "This event loop is already running"，_connect() 协程从未 await。
+    修复：reply.py 顶层不 import lark_oapi；_run_ws() import 后 monkey-patch
+    lark_oapi.ws.client.loop 为 daemon 线程的 loop。
 """
 
 from __future__ import annotations
@@ -70,7 +41,7 @@ trace_logger: TraceLogger | None = None
 rate_limiter: RateLimiter | None = None
 
 # ── 重连策略 ─────────────────────────────────────────────────
-_AGENT_TIMEOUT = 60                     # Agent 推理超时（秒）
+_AGENT_TIMEOUT = 90                     # Agent 推理超时（秒）
 _STALE_MSG_THRESHOLD = 300              # 消息超过 5 分钟视为延迟到达（秒）
 
 # ── 内部状态 ─────────────────────────────────────────────────
@@ -79,6 +50,8 @@ _ws_loop: asyncio.AbstractEventLoop | None = None  # daemon 线程的事件循�
 _ws_thread: threading.Thread | None = None
 _connected = False
 _stop_requested = False  # stop() 置位后，_run_ws() 据此区分正常停止与异常退出
+# 连接状态：disabled | no_credentials | connecting | connected | disconnected
+_connection_status = "disabled"
 # 每个 open_id 当前活跃的推理任务；新消息到达时取消旧任务，确保始终回答最新问题
 _active_tasks: dict[str, asyncio.Task] = {}
 
@@ -104,58 +77,63 @@ def _parse_message_text(content: str) -> str:
 # ── 消息处理 ──────────────────────────────────────────────────
 
 async def _process_message(open_id: str, text: str, msg_id: str, create_time_ms: str = "") -> None:
-    """处理单条飞书消息：时效检查 → 限流 → 取消旧任务 → 异步 agent。
-
-    用户连发消息时，新消息会取消上一个正在进行的推理任务，
-    确保机器人始终回答用户最新的问题。
-    """
+    """处理单条飞书消息：去重 → 时效 → 限流 → 取消旧任务 → 启动推理。"""
     logger.info("飞书消息 open_id=%s msg_id=%s text=%s", open_id, msg_id, text[:100])
 
-    # 1. 消息为空
+    # 1. 去重：同一 msg_id 只处理一次
+    DEDUP_TTL = 3600
+    if rate_limiter and rate_limiter._redis:
+        added = await rate_limiter._redis.set(
+            f"lg:feishu:dedup:{msg_id}", "1", ex=DEDUP_TTL, nx=True,
+        )
+        if added == None:
+            logger.info("飞书消息重复投递，跳过 msg_id=%s", msg_id)
+            return
+
+    # 2. 消息为空
     if not text:
-        await send_reply(open_id, "请发送有效的问题", msg_id)
+        await send_reply("请发送有效的问题", msg_id)
         return
 
-    # 2. 时效检查：WebSocket 断线重连后飞书会补投积压消息，过旧的消息不再推理
+    # 3. 时效检查：过旧消息（断线重连补投）或时间戳解析异常 → 回复用户并跳过
     if create_time_ms:
         try:
             create_time = datetime.fromtimestamp(int(create_time_ms) / 1000)
             age = (datetime.now() - create_time).total_seconds()
             if age > _STALE_MSG_THRESHOLD:
                 logger.warning("飞书消息延迟 %.0f 秒，跳过推理 open_id=%s", age, open_id)
-                await send_reply(open_id, "您的消息因网络原因延迟到达，如仍需回答请重新发送", msg_id)
+                await send_reply("您的消息因网络原因延迟到达，如仍需回答请重新发送", msg_id)
                 return
         except (ValueError, TypeError):
-            pass
+            logger.warning("飞书 create_time 解析失败，视为过期 msg_id=%s", msg_id)
+            await send_reply("消息时间戳异常，请重新发送", msg_id)
+            return
 
-    # 3. 限流检查
+    # 4. 限流检查
     if rate_limiter:
         allowed, retry_after = await rate_limiter.check_by_user_id(open_id)
         if not allowed:
-            await send_reply(open_id, f"请求太频繁，请 {retry_after} 秒后再试", msg_id)
+            await send_reply(f"请求太频繁，请 {retry_after} 秒后再试", msg_id)
             logger.info("飞书限流命中 open_id=%s retry_after=%d", open_id, retry_after)
             return
 
-    # 4. 取消该用户上一个推理任务（同步块，无 await，防止竞态）
+    # 5. 取消该用户上一个推理任务（同步块，无 await，防止竞态）
     old_task = _active_tasks.get(open_id)
-    if old_task is not None and not old_task.done():
+    if old_task != None and not old_task.done():
         old_task.cancel()
         logger.info("飞书取消旧任务 open_id=%s", open_id)
 
-    # 5. 启动新推理任务（占位回复在 _run_agent 内发送）
+    # 6. 启动新推理任务（占位回复在 _run_agent 内发送）
     task = asyncio.create_task(_run_agent(open_id, text, msg_id))
     _active_tasks[open_id] = task
 
 
 async def _run_agent(open_id: str, text: str, msg_id: str) -> None:
-    """后台执行 Agent 推理：占位回复 → 推理 → 最终回复。
-
-    被新消息取消时不发送回复。超时/异常时仅当仍是活跃任务才回复。
-    """
+    """占位回复 → 推理 → 最终回复。被取消静默退出；超时/异常仅活跃任务才回复。"""
     current_task = asyncio.current_task()
     try:
         # 1. 占位回复
-        await send_reply(open_id, "正在查询中…", msg_id)
+        await send_reply("正在查询中…", msg_id)
 
         # 2. Agent 推理
         result = await asyncio.wait_for(
@@ -164,21 +142,21 @@ async def _run_agent(open_id: str, text: str, msg_id: str) -> None:
         )
 
         # 3. 最终回复（仅当仍是活跃任务）
-        if _active_tasks.get(open_id) is current_task:
-            await send_reply(open_id, result, msg_id)
+        if _active_tasks.get(open_id) == current_task:
+            await send_reply(result, msg_id)
     except asyncio.CancelledError:
         # 被新消息取消，静默退出
         return
     except asyncio.TimeoutError:
         logger.warning("飞书 Agent 超时 open_id=%s", open_id)
-        if _active_tasks.get(open_id) is current_task:
-            await send_reply(open_id, "处理超时，请简化问题重试", msg_id)
+        if _active_tasks.get(open_id) == current_task:
+            await send_reply("处理超时，请简化问题重试", msg_id)
     except Exception:
         logger.exception("飞书 Agent 异常 open_id=%s", open_id)
-        if _active_tasks.get(open_id) is current_task:
-            await send_reply(open_id, "处理出错，请稍后重试", msg_id)
+        if _active_tasks.get(open_id) == current_task:
+            await send_reply("处理出错，请稍后重试", msg_id)
     finally:
-        if _active_tasks.get(open_id) is current_task:
+        if _active_tasks.get(open_id) == current_task:
             _active_tasks.pop(open_id, None)
 
 
@@ -187,8 +165,6 @@ async def _do_run_chat(open_id: str, text: str) -> str:
     if not memory_manager or not trace_logger:
         return "服务暂时不可用"
 
-    # DeepSeek API 不可用时 run_chat 内部会抛异常，
-    # 由 _run_agent 的 except 捕获并回复"处理出错，请稍后重试"
     result = await run_chat(
         session_id=open_id,
         user_message=text,
@@ -205,45 +181,34 @@ async def start(
     trace: TraceLogger,
     rl: RateLimiter,
 ) -> None:
-    """初始化飞书 WebSocket 长连接。
-
-    注入外部依赖（memory / trace / rate_limiter），
-    然后启动 lark-oapi WebSocket 客户端后台任务。
-
-    如果 FEISHU_ENABLED=False，则跳过（本地开发模式）。
-    """
-    global memory_manager, trace_logger, rate_limiter
+    """注入依赖并启动 WebSocket 后台线程。FEISHU_ENABLED=False 时跳过。"""
+    global memory_manager, trace_logger, rate_limiter, _connection_status
     memory_manager = mem
     trace_logger = trace
     rate_limiter = rl
 
     if not FEISHU_ENABLED:
+        _connection_status = "disabled"
         logger.info("飞书已禁用（FEISHU_ENABLED=false），跳过 WebSocket 连接")
         return
 
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+        _connection_status = "no_credentials"
         logger.warning("飞书已启用但缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET，跳过连接")
         return
 
+    _connection_status = "connecting"
     logger.info("飞书 WebSocket 长连接启动中…")
     _start_ws_thread()
 
 
 async def stop() -> None:
-    """优雅关闭飞书 WebSocket 长连接。
-
-    分两步:
-        1. 通过 run_coroutine_threadsafe 在 daemon 线程的 loop 上执行
-           _ws_client._disconnect()，关闭 WebSocket 连接。
-        2. 调用 _ws_loop.call_soon_threadsafe(_ws_loop.stop) 停止 loop，
-           让 _ws_client.start() 内部的 loop.run_until_complete(_select()) 退出。
-
-    _stop_requested 标志让 _run_ws() 的 except 块区分"正常停止"与"异常退出"。
-    """
-    global _ws_client, _ws_loop, _connected, _stop_requested
+    """跨线程关闭：run_coroutine_threadsafe 调 _disconnect()，再 stop loop。"""
+    global _ws_client, _ws_loop, _connected, _stop_requested, _connection_status
     _connected = False
+    _connection_status = "disconnected"
     _stop_requested = True
-    if _ws_client is not None and _ws_loop is not None:
+    if _ws_client != None and _ws_loop != None:
         logger.info("飞书 WebSocket 正在关闭…")
         # 1. 断开 WebSocket 连接
         try:
@@ -262,23 +227,30 @@ async def stop() -> None:
         _ws_loop = None
 
 
-def is_connected() -> bool:
-    """查询飞书 WebSocket 连接状态。"""
-    return _connected
+
+def get_connection_status() -> dict:
+    """返回 {"status": connected|connecting|disabled|no_credentials|disconnected}。"""
+    return {"status": _connection_status}
 
 
 # ── WebSocket 线程管理 ─────────────────────────────────────────
 
+async def _connection_watchdog():
+    """每 30s 检查 _connected，连续 3 次 False 告警。"""
+    fail_count = 0
+    while not _stop_requested:
+        await asyncio.sleep(30)
+        if not _connected:
+            fail_count += 1
+            if fail_count >= 3:
+                logger.error("飞书 WebSocket 断线超过 %d 秒！", fail_count * 30)
+        else:
+            fail_count = 0
+
+
 def _run_ws() -> None:
-    """在独立线程中运行飞书 WebSocket 客户端（同步阻塞）。
-
-    SDK 的 WsClient.start() 是同步阻塞方法，必须跑在独立线程。
-    auto_reconnect=True 时 SDK 内部处理断线重连。
-
-    关于 lark_oapi 模块级 loop 绑定问题及修复方案，
-    详见模块顶部 docstring "Event loop 绑定问题" 一节。
-    """
-    global _ws_client, _ws_loop, _connected, _stop_requested
+    """daemon 线程入口：建 loop → 重建 Redis 连接 → import SDK → monkey-patch loop → start()。"""
+    global _ws_client, _ws_loop, _connected, _stop_requested, _connection_status
     global memory_manager, trace_logger, rate_limiter
 
     # 1. 为 daemon 线程创建专属事件循环
@@ -286,11 +258,8 @@ def _run_ws() -> None:
     asyncio.set_event_loop(_loop)
     _ws_loop = _loop
 
-    # 2. 为 daemon 线程创建独立的 Redis 连接实例
-    #    主线程（uvicorn）创建的 redis.asyncio 连接池绑定到主线程 loop，
-    #    在 daemon 线程跨 loop 使用会静默失败（check_and_clear_summary_flag
-    #    的 except 会把 self._redis 设为 None，后续全部走内存 fallback）。
-    #    这里在 daemon 线程的 loop 里重新 connect，确保连接绑定到本线程 loop。
+    # 2. daemon 线程重建 Redis 连接：主线程的 redis.asyncio 连接池绑主线程 loop，
+    #    跨 loop 用会静默失败（except 把 _redis 设 None 走内存 fallback）。
     memory_manager = MemoryManager()
     trace_logger = TraceLogger()
     rate_limiter = RateLimiter()
@@ -301,69 +270,61 @@ def _run_ws() -> None:
 
     try:
         # 3. 延迟导入 SDK 模块（在 try 内，导入失败也能记录日志）
-        from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
-        from lark_oapi.ws import Client as WsClient
-        from lark_oapi.ws import client as _ws_module  # 模块对象，用于 monkey-patch
-        from lark_oapi.event.dispatcher_handler import EventDispatcherHandlerBuilder
+        import lark_oapi as lark
     except Exception:
         logger.exception("飞书 lark_oapi 导入失败，请检查 lark-oapi 是否正确安装")
+        _connection_status = "disconnected"
         _ws_loop = None
         return
 
     # 4. 强制将 SDK 模块级 loop 替换为当前线程 loop（防止主线程预导入导致绑定错误）
-    _ws_module.loop = _loop
+    lark.ws.client.loop = _loop
 
     # 5. 构建事件处理器
-    def _handler(data: P2ImMessageReceiveV1) -> None:
-        event_data = data.event
-        if event_data is None or event_data.message is None:
-            logger.info("飞书事件无 message 字段，跳过")
-            return
+    def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
+        """处理接收消息事件
 
-        msg_type = event_data.message.message_type or ""
+        当用户向机器人发送私聊消息时触发。提取消息内容和发送者信息，
+        调度异步 Agent 处理。
+        """
+        try:
+            event = data.event
+            message = event.message
+            msg_type = message.message_type
 
-        # 只处理 text 类型消息（post 是机器人自己发的富文本，跳过避免循环）
-        if msg_type != "text":
-            logger.info("飞书消息非 text 类型（%s），跳过", msg_type)
-            return
+            # 只处理文本消息（post 是机器人自己发的富文本，跳过防止循环）
+            if msg_type != "text":
+                return
 
-        msg_id = event_data.message.message_id or ""
-        open_id = ""
-        if event_data.sender and event_data.sender.sender_id:
-            sender_id_obj = event_data.sender.sender_id
-            # 飞书 sender_id 对象可能包含 open_id / user_id / union_id，
-            # 优先用 open_id（最稳定，作为 session_id 最合适）
-            open_id = getattr(sender_id_obj, "open_id", "") or ""
+            msg_id = message.message_id or ""
+            text = _parse_message_text(message.content)
+            if not text:
+                return
+
+            # 获取发送者 open_id（优先 open_id，兜底 user_id）
+            sender_id = event.sender.sender_id
+            open_id = sender_id.open_id or ""
             if not open_id:
-                # 兜底：尝试 user_id
-                open_id = getattr(sender_id_obj, "user_id", "") or ""
+                open_id = sender_id.user_id or ""
 
-        text = _parse_message_text(event_data.message.content)
-        if not open_id or not text:
-            logger.info("飞书消息 open_id 或 text 为空，跳过")
-            return
+            if not open_id:
+                return
 
-        logger.debug(
-            "飞书 sender_type=%s sender_id=%s",
-            event_data.sender.sender_type,
-            {k: getattr(sender_id_obj, k, None) for k in ("open_id", "user_id", "union_id")},
-        )
+            # 消息创建时间（毫秒时间戳），用于延迟消息检测
+            create_time_ms = getattr(message, "create_time", "") or ""
 
-        # 飞书消息创建时间（毫秒时间戳字符串），用于延迟消息检测
-        create_time_ms = getattr(event_data.message, "create_time", "") or ""
+            _loop.create_task(_process_message(open_id, text.strip(), msg_id, create_time_ms))
+        except Exception as e:
+            logger.error("飞书消息处理异常: %s", e)
 
-        # 调度异步消息处理（_loop 是本线程的事件循环）
-        _loop.create_task(_process_message(open_id, text.strip(), msg_id, create_time_ms))
-
-    _builder = EventDispatcherHandlerBuilder(
-        encrypt_key="",           # WebSocket 长连接模式无需加密密钥
-        verification_token="",    # SDK 内置鉴权，无需手动验签
+    _event_handler = (
+        lark.EventDispatcherHandler.builder(FEISHU_APP_ID, FEISHU_APP_SECRET)
+        .register_p2_im_message_receive_v1(do_p2_im_message_receive_v1)
+        .build()
     )
-    _builder.register_p2_im_message_receive_v1(_handler)
-    _event_handler = _builder.build()
 
     # 6. 创建客户端并启动（同步阻塞）
-    _ws_client = WsClient(
+    _ws_client = lark.ws.Client(
         app_id=FEISHU_APP_ID,
         app_secret=FEISHU_APP_SECRET,
         event_handler=_event_handler,
@@ -373,7 +334,9 @@ def _run_ws() -> None:
     try:
         logger.info("飞书 WebSocket 线程启动")
         _connected = True
+        _connection_status = "connected"
         _stop_requested = False
+        _loop.create_task(_connection_watchdog())  # 启动断线监控
         _ws_client.start()
     except Exception:
         if _stop_requested:
@@ -384,6 +347,7 @@ def _run_ws() -> None:
             logger.exception("飞书 WebSocket 线程异常退出")
     finally:
         _connected = False
+        _connection_status = "disconnected"
         _ws_loop = None
 
 
@@ -391,7 +355,7 @@ def _start_ws_thread() -> None:
     """启动飞书 WebSocket 后台线程（daemon，进程退出时自动终止）。"""
     global _ws_thread
 
-    if _ws_thread is not None and _ws_thread.is_alive():
+    if _ws_thread != None and _ws_thread.is_alive():
         logger.warning("飞书 WebSocket 线程已在运行，跳过重复启动")
         return
 

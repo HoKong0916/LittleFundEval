@@ -1,9 +1,4 @@
-"""对话编排管道 —— 非流式：内部逐 token 累积，返回完整 answer。
-
-用法:
-    async with MemoryManager() as memory, TraceLogger() as trace:
-        result = await run_chat(session_id, user_message, memory, trace)
-"""
+"""对话编排管道 —— 摘要检查 → 路由分类 → 执行器 → 存入记忆。"""
 
 from config import MAX_TOKEN_THRESHOLD, count_tokens
 from core.direct_answer import run_direct_answer
@@ -22,12 +17,9 @@ async def run_chat(
     memory: MemoryManager,
     trace: TraceLogger,
 ) -> dict:
-    """执行一次完整的对话管道，返回 {"answer": str, "category": str}。
+    """执行对话管道，返回 {"answer": str, "category": str}。
 
-    session_id 语义：
-        飞书通道 → 用户的 open_id
-        API 通道  → token 的 user_id
-    不再生成随机 UUID。
+    session_id 飞书用 open_id，API 用 token 的 user_id。
     """
     # ── 摘要检查（N+1 轮启动时）───
     need_summary = await memory.check_and_clear_summary_flag(session_id)

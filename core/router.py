@@ -1,4 +1,4 @@
-"""意图路由 —— 用本地 LLM 将用户问题分类为 DirectAnswer / ReAct / REWOO，并给出所需工具列表。"""
+"""意图路由 —— 本地 LLM 分类用户问题为 DirectAnswer / ReAct / REWOO，并给出工具列表。"""
 
 import json
 
@@ -16,9 +16,9 @@ async def classify_intent(
     trace: TraceLogger,
     session_id: str,
 ) -> dict:
-    """用本地 LLM 将用户问题分类为 DirectAnswer 或 ReAct，并给出所需工具列表。
+    """本地 LLM 分类，返回 {category, tools_needed, reasoning}。
 
-    传入 history 时，LLM 可感知对话中已有哪些数据，避免对"仅需基于已有数据给建议"的追问误判为需要调工具。
+    传入 history 让 LLM 感知已有数据，避免对追问误判为需要调工具。
     """
     user_question = user_message[-1]["content"] if user_message else ""
 

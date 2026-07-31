@@ -1,21 +1,7 @@
-"""REWOO 执行器 —— 三阶段流水线：提取 → 并行获取 → 综合回答。
+"""REWOO 执行器 —— 三阶段流水线：提取基金名 → 并发拉数据 → 综合回答。
 
-REWOO = REasoning WithOut Observations（推理与数据获取分离），
-与 ReAct 的 Think → Act → Observe 交替模式不同，
-REWOO 先批量并发获取所有数据，再一次生成回答。
-
-三阶段:
-    阶段1（提取）：LLM 从用户问题中提取基金名称 → search_fund 搜索代码
-    阶段2（获取）：per-fund 工具按基金代码展开 + 独立工具，单次 asyncio.gather 全部发出
-    阶段3（综合）：将所有 Observation 注入 system prompt，cloud_chat 流式生成回答
-
-优势:
-    - N 只基金的 per-fund 工具全部并发，墙钟时间 ≈ 最慢单次 TCP 往返
-    - 不反复调 LLM 做上下文判断，节省 token
-
-非流式:
-    内部仍流式调用 cloud_chat（不增加等待时间），
-    累积完整输出后一次返回。
+与 ReAct 的交替模式不同，REWOO 先 asyncio.gather 并发获取所有数据再一次生成回答，
+N 只基金的 per-fund 工具全部并发，墙钟时间 ≈ 最慢单次调用。
 """
 
 import asyncio
@@ -107,14 +93,9 @@ async def _execute_data_tools(
     tools_needed: list, fund_codes: list[str], user_question: str,
     trace: TraceLogger, session_id: str,
 ) -> dict:
-    """并发执行数据工具：per-fund 工具按代码展开，其余工具直接调用。
+    """并发执行数据工具。per-fund 工具按代码笛卡尔展开，独立工具直接调用。
 
-    工具分类：
-    - per-fund 工具（PER_FUND_TOOLS）：按 fund_code 笛卡尔展开，每只基金 × 每个工具
-    - 独立工具（如 capital_inflow_in_sectors）：不依赖 fund_code，直接调用
-    - search_fund 已在阶段1使用过，阶段2跳过
-
-    asyncio.gather(return_exceptions=True) 确保单个工具失败不会阻塞其他工具。
+    search_fund 已在阶段1用过，阶段2跳过。gather(return_exceptions=True) 单点失败不阻塞其他。
     """
     tasks: list[tuple[str, dict]] = []
 
@@ -198,10 +179,7 @@ async def run_rewoo_loop(
     user_message: list, tools_needed: list, history: list[dict],
     has_context: bool, trace: TraceLogger, session_id: str,
 ) -> str:
-    """REWOO 执行器：LLM提取基金名 → 解析代码 → 并发拉数据 → 综合回答。
-
-    Thought/Action/Observation 原文仅写入 trace JSON 日志。
-    """
+    """REWOO 主入口：提取基金名 → 解析代码 → 并发拉数据 → 综合回答。"""
     user_question = user_message[-1]["content"] if user_message else ""
 
     # ── 阶段1：解析基金名称与代码 ──

@@ -1,10 +1,4 @@
-"""API Token 鉴权依赖 —— SQLite 后端，支持多 Token + 过期校验。
-
-用法:
-    @app.post("/chat/stream")
-    async def chat(..., token_info: TokenInfo = Depends(verify_token)):
-        print(token_info.user_id, token_info.tier)
-"""
+"""API Token 鉴权依赖 —— Bearer Token + SQLite 校验。"""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,7 +14,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 @dataclass
 class TokenInfo:
-    """鉴权通过后的 Token 信息，注入到端点函数中。"""
+    """鉴权通过后的 Token 信息。"""
     token: str
     user_id: str
     name: str
@@ -30,11 +24,8 @@ class TokenInfo:
 async def verify_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> TokenInfo:
-    """从 Authorization: Bearer <token> 验证 Token 有效性。
-
-    校验链: 提取 → 查库 → 吊销检查 → 过期检查 → 返回 TokenInfo
-    """
-    if credentials is None:
+    """校验 Bearer Token：查库 → 吊销 → 过期 → 返回 TokenInfo。"""
+    if credentials == None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="缺少 Authorization 头，格式: Bearer <token>",
@@ -43,7 +34,7 @@ async def verify_token(
     token = credentials.credentials
     row = get_token(token)
 
-    if row is None:
+    if row == None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="无效 Token",
@@ -56,7 +47,7 @@ async def verify_token(
         )
 
     expires_at = row["expires_at"]
-    if expires_at is not None:
+    if expires_at != None:
         try:
             expiry = datetime.fromisoformat(str(expires_at))
             if datetime.now(timezone.utc).astimezone() > expiry.astimezone():

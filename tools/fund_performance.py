@@ -1,6 +1,6 @@
-"""基金基本面工具 —— 从收益、风险、当天三个维度评估一只基金。
+"""基金基本面 —— 收益/风险/当天三维度评估。
 
-数据源：丹橘(收益/排名/基本信息) + fundgz(实时估算净值) + akshare(波动率/夏普/回撤-近1年)，三路并发。
+四路数据：丹橘(收益/排名/基本信息) + fundgz(实时估算净值，不可用时回退 estimate_fund_nav) + akshare(波动率/夏普/回撤，近1年)。
 """
 
 import asyncio
@@ -18,7 +18,7 @@ if not hasattr(pd.DataFrame, "map"):
 
 
 async def get_fund_performance(fund_code: str) -> str:
-    """获取基金基本面：收益状况 + 风险状况 + 当天状况，返回 LLM 可直接使用的文本。"""
+    """三路并发拉数据，返回格式化的基本面文本。"""
     result: dict = {"基金代码": fund_code}
     errors: list[str] = []
 
@@ -33,6 +33,30 @@ async def get_fund_performance(fund_code: str) -> str:
         for name, r in zip(("丹橘", "fundgz", "akshare"), gathered):
             if isinstance(r, Exception):
                 errors.append(f"{name}: {r}")
+
+    # fundgz 不可用时，回退到 estimate_nav 获取实时估算
+    if result.get("估算涨幅") is None and result.get("估算净值") is None:
+        try:
+            from tools.estimate_nav import _calc_nav_estimate
+
+            est = await _calc_nav_estimate(fund_code)
+            if est.get("estimated_change") is not None:
+                est_change = est["estimated_change"]
+                result["估算涨幅"] = f"{est_change:+.2f}%"
+                latest_nav = result.get("最新净值")
+                if latest_nav is not None:
+                    try:
+                        nav = float(latest_nav)
+                        result["估算净值"] = nav * (1 + est_change / 100)
+                    except (ValueError, TypeError):
+                        pass
+                now = datetime.now()
+                result["估值日期"] = now.strftime("%Y-%m-%d")
+                result["估值时间"] = now.strftime("%H:%M")
+            elif est.get("error"):
+                errors.append(f"estimate_nav: {est['error']}")
+        except Exception as e:
+            errors.append(f"estimate_nav: {e}")
 
     if errors and len(result) <= 1:
         return f"错误: {'; '.join(errors)}"
@@ -82,7 +106,7 @@ async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient
 
 def _pct(val):
     """数值 → +x.xx% 格式字符串。"""
-    if val is None:
+    if val == None:
         return None
     try:
         return f"{float(val):+.2f}%"
@@ -167,7 +191,7 @@ def _fetch_risk(result: dict, fund_code: str) -> None:
 
 
 def _format(d: dict, errors: list[str]) -> str:
-    """将 get_fund_performance 收集的结果 dict 格式化为多段文本（基本信息/收益/风险/当天/数据源异常）。"""
+    """结果 dict 格式化为多段文本（基本信息/收益/风险/当天/数据源异常）。"""
     lines = []
 
     # ── 头部：基本信息 ──
@@ -218,7 +242,7 @@ def _format(d: dict, errors: list[str]) -> str:
     ]
     for label, key, period in risk_items:
         v = d.get(key)
-        if v is not None and v != "":
+        if v != None and v != "":
             line = f"  {label:　<10} {v}"
             if period:
                 line += f"  ({period})"
@@ -229,7 +253,7 @@ def _format(d: dict, errors: list[str]) -> str:
     lines.append("━━━ 当天状况 ━━━")
     nav_date = d.get("净值日期", "")
     nav = d.get("最新净值")
-    if nav is not None:
+    if nav != None:
         lines.append(f"  最新净值({nav_date}): {nav}")
     day_chg = d.get("日涨跌")
     if day_chg:
@@ -239,7 +263,7 @@ def _format(d: dict, errors: list[str]) -> str:
     est_chg = d.get("估算涨幅")
     est_date = d.get("估值日期", "")
     est_time = d.get("估值时间", "")
-    if est_nav is not None:
+    if est_nav != None:
         line = f"  估算净值({est_date} {est_time}): {est_nav:.4f}"
         if est_chg:
             line += f"  {est_chg}"

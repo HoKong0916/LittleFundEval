@@ -1,10 +1,7 @@
-"""调用链 trace 日志 —— 每步记录 JSON 到 Redis List，支持 24h 回溯。
+"""调用链 trace —— 每步记 JSON 到 Redis List，24h 回溯。
 
-Key 结构：
-    session:{id}:trace  →  List（每步一条 JSON，RPUSH 追加，EXPIRE 86400）
-
-DEBUG_TRACE=1 时终端打印人类可读进度，原文只在 JSON 日志中保留。
-Redis 不可用时自动降级为内存 list。
+Key: lg:session:{id}:trace（RPUSH + EXPIRE 86400）
+DEBUG_TRACE=1 时终端打印人类可读进度。Redis 不可用降级为内存 list。
 """
 
 import asyncio
@@ -55,18 +52,7 @@ _PROGRESS_MESSAGES: dict[str, str] = {
 
 
 class TraceLogger:
-    """调用链 trace 记录器。
-
-    用法 —— CLI（async with 自动管理连接）:
-        async with TraceLogger() as trace:
-            await trace.log(sid, step=1, event="react.tool_call", ...)
-
-    用法 —— FastAPI（手动生命周期）:
-        trace = TraceLogger()
-        await trace.connect()        # startup
-        ...
-        await trace.disconnect()     # shutdown
-    """
+    """调用链 trace 记录器。支持 async with 或手动 connect/disconnect。"""
 
     def __init__(self):
         self._redis: aioredis.Redis | None = None
@@ -75,7 +61,7 @@ class TraceLogger:
     # ── 生命周期 ──────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """建立 Redis 连接。失败启用内存降级，不抛异常。"""
+        """建立 Redis 连接，失败降级为内存模式。"""
         url = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
         kwargs: dict = {"decode_responses": False}
         if REDIS_PASSWORD:
@@ -110,11 +96,11 @@ class TraceLogger:
 
     @staticmethod
     def _trace_key(session_id: str) -> str:
-        return f"session:{session_id}:trace"
+        return f"lg:session:{session_id}:trace"
 
     @property
     def _connected(self) -> bool:
-        return self._redis is not None
+        return self._redis != None
 
     # ── 记录 ──────────────────────────────────────────────────
 
@@ -183,7 +169,7 @@ class TraceLogger:
             return
 
         template = _PROGRESS_MESSAGES.get(event)
-        if template is None:
+        if template == None:
             return
 
         # 准备模板变量：先从 input dict 中提取，再用显式 kwargs 覆盖
