@@ -39,7 +39,7 @@ async def run_direct_answer(
     t0 = time.perf_counter()
     buffer = ""
     llm_usage = None
-    async for chunk in cloud_chat(messages):
+    async for chunk in cloud_chat(messages, session_id=session_id):
         if chunk["type"] == "text":
             buffer += chunk["content"]
         elif chunk["type"] == "done":

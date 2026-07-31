@@ -52,6 +52,9 @@ TOKEN_DB_PATH = os.getenv("TOKEN_DB_PATH", "./data/tokens.db")
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "5"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 
+# ── LLM token 日预算（cloud_chat 每用户每天输入+输出合计上限）──
+DAILY_TOKEN_BUDGET = int(os.getenv("DAILY_TOKEN_BUDGET", "550000"))
+
 # ── 飞书自建应用 ──────────────────────────────────────────
 # 飞书机器人 App ID / App Secret（从飞书开放平台获取）
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")

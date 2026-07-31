@@ -111,13 +111,14 @@ async def run_react_loop(
         buffer = ""
         parsed = None
         llm_usage = None
+        budget_exceeded = False
 
         # ── 流式 LLM 调用 ──────────────────────────────────────
         # 两种提前终止路径：
         #   1. 增量检测到 Action 闭括号 → 立即截断流，进入工具调用
         #   2. 模型返回原生 tool_calls → 兜底路径，无需解析格式
         # 正常结束（done）→ 进入兜底解析（Final Answer 场景）
-        gen = cloud_chat(messages)
+        gen = cloud_chat(messages, session_id=session_id)
         try:
             async for chunk in gen:
                 if chunk["type"] == "text":
@@ -141,11 +142,20 @@ async def run_react_loop(
 
                 elif chunk["type"] == "done":
                     llm_usage = chunk.get("usage")
+                    if chunk.get("finish_reason") == "budget_exceeded":
+                        budget_exceeded = True
                     break
         finally:
             await gen.aclose()
 
         llm_latency = (time.perf_counter() - t_step) * 1000
+
+        # 预算耗尽：buffer 已含提示文本，直接作为最终回复
+        if budget_exceeded:
+            final_answer = buffer
+            await trace.log(session_id, step=step, event="react.budget_exceeded",
+                            output=final_answer)
+            break
 
         # 兜底：流正常结束（非截断），用完整 buffer 做一次全量解析
         # 处理场景：Final Answer、格式不规范但包含 Action 的输出
@@ -213,7 +223,7 @@ async def run_react_loop(
                 ),
             })
             fallback_buffer = ""
-            async for chunk in cloud_chat(messages):
+            async for chunk in cloud_chat(messages, session_id=session_id):
                 if chunk["type"] == "text":
                     fallback_buffer += chunk["content"]
                 elif chunk["type"] == "done":

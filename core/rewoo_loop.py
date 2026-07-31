@@ -155,7 +155,7 @@ async def _synthesize(
     t0 = time.perf_counter()
     buffer = ""
     llm_usage = None
-    gen = cloud_chat(messages)
+    gen = cloud_chat(messages, session_id=session_id)
     try:
         async for chunk in gen:
             if chunk["type"] == "text":
