@@ -19,7 +19,7 @@ async def run_chat(
 ) -> dict:
     """执行对话管道，返回 {"answer": str, "category": str}。
 
-    session_id 飞书用 open_id，API 用 token 的 user_id。
+    session_id 飞书用 open_id，API 调试用 session_id（请求体传入）。
     """
     # ── 摘要检查（N+1 轮启动时）───
     need_summary = await memory.check_and_clear_summary_flag(session_id)

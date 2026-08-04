@@ -18,6 +18,7 @@ Thumbs.db
 
 # ── 运行时产物 ────────────────────────────────────────
 data/*.log
+data/*.db
 data/*.db-shm
 data/*.db-wal
 appendonly.aof

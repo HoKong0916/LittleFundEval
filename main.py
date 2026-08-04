@@ -1,8 +1,12 @@
-"""FastAPI 入口 —— /health /trace /chat 端点 + 飞书 WebSocket。
+"""FastAPI 入口 —— 飞书 WebSocket 为主交互通道，REST 仅用于开发调试与面试演示。
 
 启动: uvicorn main:app --port 8000
-/chat 需 Bearer Token，admin 不限流，visitor 滑动窗口限流。
-飞书走 WebSocket 收消息，session_id = open_id。
+端点:
+    GET  /health            健康检查
+    GET  /feishu/status     飞书 WebSocket 连接状态
+    GET  /trace/{sid}       查看调用链（面试演示可解释性核心）
+    POST /chat              极简调试端点，无鉴权/无限流/无会话锁
+飞书走 WebSocket 收消息，session_id = open_id；API 调试端点 session_id 由请求体传入。
 """
 
 import asyncio
@@ -11,7 +15,7 @@ import os
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 # 日志配置：必须在所有业务模块导入前设置，确保各模块 logger.info 可见
@@ -47,7 +51,6 @@ else:
     _root.addHandler(_stream)
 
 from channels.feishu import bot as feishu_bot
-from core.auth import TokenInfo, verify_token
 from core.chat import run_chat
 from core.memory import MemoryManager
 from core.rate_limit import RateLimiter
@@ -82,23 +85,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Little Gambling", lifespan=lifespan)
 
 
-# ── API 依赖：鉴权 & 限流 ─────────────────────────────────────
-
-async def check_rate_limit(token_info: TokenInfo = Depends(verify_token)) -> TokenInfo:
-    """限流依赖：admin 跳过，visitor 按 token.user_id 限流。"""
-    allowed, retry_after = await rate_limiter.check(token_info)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=f"请求频率超限，{retry_after} 秒后再试",
-        )
-    return token_info
-
-
 # ── API 模型 ──────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str = "debug"   # 调试用：切换会话可测记忆/上下文，默认 debug
 
 
 class ChatResponse(BaseModel):
@@ -128,29 +119,23 @@ async def get_trace(session_id: str):
     }
 
 
-# ── API 端点：POST /chat ──────────────────────────────────────
+# ── API 端点：POST /chat（开发调试用，无鉴权/无限流/无会话锁）──
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(
-    body: ChatRequest,
-    token_info: TokenInfo = Depends(check_rate_limit),
-):
-    """非流式 JSON 聊天端点。"""
+async def chat(body: ChatRequest):
+    """极简调试端点：直接跑 run_chat 管道，返回 {answer, category}。
+
+    仅供开发自测与面试演示调用链用，生产交互走飞书机器人。
+    session_id 由请求体传入，切换可测会话记忆与上下文延续。
+    """
     message = (body.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message 字段不能为空")
 
-    # session_id = token 的 user_id（不再生成随机 UUID）
-    session_id = token_info.user_id
+    session_id = body.session_id
 
     await trace_logger.log(session_id, step=0, event="api.request",
-                           input={"user_id": token_info.user_id,
-                                  "tier": token_info.tier,
-                                  "message": message[:200]})
-
-    # 会话锁：同一 user_id 同一时间只允许一个请求处理
-    if not await memory_manager.acquire_session_lock(session_id):
-        raise HTTPException(status_code=409, detail="该用户正在处理中，请稍后重试")
+                           input={"session_id": session_id, "message": message[:200]})
 
     try:
         result = await asyncio.wait_for(
@@ -164,8 +149,6 @@ async def chat(
         raise
     except Exception:
         raise HTTPException(status_code=500, detail="处理出错，请稍后重试")
-    finally:
-        await memory_manager.release_session_lock(session_id)
 
 
 # ── 飞书端点：GET /feishu/status ──────────────────────────────

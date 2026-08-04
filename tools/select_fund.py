@@ -7,7 +7,6 @@ import json
 import random
 
 import httpx
-from bs4 import BeautifulSoup
 
 from llm_client import local_chat
 from prompts.select_fund import SYSTEM_PROMPT_SELECT_FUND
@@ -48,6 +47,7 @@ async def _fetch_board_tags() -> list[dict[str, str]]:
         resp.raise_for_status()
         resp.encoding = "utf-8"
 
+        from bs4 import BeautifulSoup  # 惰性导入
         soup = BeautifulSoup(resp.text, "html.parser")
         tags = []
         for a in soup.select("#content_tp a[id^='tp_']"):

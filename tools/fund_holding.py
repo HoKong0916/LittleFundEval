@@ -9,7 +9,6 @@
 import re
 
 import httpx
-from bs4 import BeautifulSoup
 
 
 def _to_tencent_code(page_code: str) -> str:
@@ -94,6 +93,7 @@ async def _fetch_holdings_data(fund_code: str) -> dict:
     ) as client:
         raw = await client.get(url=requests_url)
 
+    from bs4 import BeautifulSoup  # 惰性导入
     soup = BeautifulSoup(raw.text, "html.parser")
 
     # ── 基金名称 ──

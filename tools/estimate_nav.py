@@ -19,7 +19,6 @@ import json
 import re
 from datetime import datetime, timedelta
 
-import akshare as ak
 import httpx
 
 from tools.fund_holding import _fetch_holdings_data
@@ -38,6 +37,7 @@ def _infer_asset_allocation_by_type(fund_code: str) -> dict:
 
 def portfolio_asset_allocation(fund_code: str, date: str) -> dict[str, str] | None:
     """akshare 拉取最新季报资产配置，返回 {"资产类型": "仓位占比%"}。"""
+    import akshare as ak  # 惰性导入，避免 akshare 拖慢冷启动
     date = date.replace("-", "")
     fund_individual_detail_hold_xq_df = ak.fund_individual_detail_hold_xq(symbol=fund_code, date=date)
     result = {k: f"{v}%" for k, v in zip(fund_individual_detail_hold_xq_df['资产类型'], fund_individual_detail_hold_xq_df['仓位占比'])}

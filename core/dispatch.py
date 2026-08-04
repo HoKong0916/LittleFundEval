@@ -20,9 +20,12 @@ async def dispatch_tool(tool_name: str, params: dict) -> str:
         try:
             result = await asyncio.wait_for(fn(**params), timeout=TOOL_TIMEOUT)
             return result if isinstance(result, str) else str(result)
-        except (asyncio.TimeoutError, Exception) as e:
+        except asyncio.TimeoutError as e:
             if attempt == 0:
-                continue                            # 首次失败，立即重试
-            # 二次失败，返回结构化错误供 LLM 感知
-            err_type = "timeout" if isinstance(e, asyncio.TimeoutError) else type(e).__name__
+                continue                            # 首次超时，立即重试
+            return f'{{"status":"error","source":"{tool_name}","msg":"{e}","type":"timeout","retried":true}}'
+        except Exception as e:
+            if attempt == 0:
+                continue                            # 首次异常，立即重试
+            err_type = type(e).__name__
             return f'{{"status":"error","source":"{tool_name}","msg":"{e}","type":"{err_type}","retried":true}}'

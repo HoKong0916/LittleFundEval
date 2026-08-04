@@ -7,7 +7,7 @@ cloud_chat 按用户（session_id）执行每日 token 预算管控，超额拒�
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 import redis.asyncio as aioredis
 from openai import AsyncOpenAI
@@ -27,8 +27,20 @@ from config import (
 logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(base_url=LLAMA_CPP_BASE_URL, api_key="not-needed")
-_deepseek_client = AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=DEEPSEEK_API_KEY)
+_deepseek_client: AsyncOpenAI | None = None
 _model_name: str | None = None
+
+
+def _get_deepseek_client() -> AsyncOpenAI:
+    """惰性构建 DeepSeek 客户端。
+
+    缺失 API key 时不在此处崩溃，而是推迟到首次实际调用时抛出——
+    便于无 key 环境下导入本模块（如单元测试、纯本地 LLM 模式）。
+    """
+    global _deepseek_client
+    if _deepseek_client is None:
+        _deepseek_client = AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=DEEPSEEK_API_KEY)
+    return _deepseek_client
 
 # ── token 预算：每次调用 cloud_chat 时现建 Redis 连接，用完即关 ──
 # 开销 < 1ms（localhost），相比 LLM 调用可忽略；天然线程安全，无需缓存
@@ -43,8 +55,24 @@ def _budget_key(session_id: str) -> str:
     return f"lg:budget:{session_id}:{datetime.now().strftime('%Y%m%d')}"
 
 
+def _budget_ttl() -> int:
+    """预算 key TTL：到当天 23:59:59 的剩余秒数。
+
+    避免 ex=固定值 + nx=True 组合导致的"当天额度翻倍" bug：
+    早 8 点用 ex=43200(12h)，晚 8 点 key 过期后下次扣减会 nx=True 重新初始化满额，
+    等于当天下午+晚上额度翻倍。改为到当天结束过期，跨天自然换新 key。
+    """
+    midnight = datetime.combine(date.today() + timedelta(days=1), time.min)
+    return max(1, int((midnight - datetime.now()).total_seconds()))
+
+
+# 单次调用最小预留额度：ReAct/REWOO 单步 prompt 约 3-5k + 输出 2k，预留 2000 作为放行下限。
+# 低于此值直接拒绝，避免"剩余 1 token 照发 5 万"——check 是软限，只看 >0 拦不住单次大额调用。
+MIN_SINGLE_CALL_TOKENS = 2000
+
+
 async def _check_budget(session_id: str) -> bool:
-    """检查当日剩余额度 > 0。key 不存在视为满额。Redis 不可用降级放行。"""
+    """检查当日剩余额度是否够一次最小调用。key 不存在视为满额。Redis 不可用降级放行。"""
     if not session_id:
         return True
     try:
@@ -55,7 +83,7 @@ async def _check_budget(session_id: str) -> bool:
         try:
             raw = await redis.get(_budget_key(session_id))
             remaining = int(raw) if raw is not None else DAILY_TOKEN_BUDGET
-            return remaining > 0
+            return remaining > MIN_SINGLE_CALL_TOKENS
         finally:
             await redis.aclose()
     except Exception:
@@ -73,7 +101,7 @@ async def _deduct_budget(session_id: str, total_tokens: int) -> None:
         )
         try:
             key = _budget_key(session_id)
-            await redis.set(key, DAILY_TOKEN_BUDGET, nx=True, ex=43200)
+            await redis.set(key, DAILY_TOKEN_BUDGET, nx=True, ex=_budget_ttl())
             await redis.decrby(key, total_tokens)
         finally:
             await redis.aclose()
@@ -90,28 +118,48 @@ async def _get_model_name() -> str:
     return _model_name
 
 
+# 降级熔断：local_chat 降级到云端是兜底，但降级态下路由/摘要/REWOO提取全在无感烧 DeepSeek。
+# 连续降级超阈值则强制关闭降级（抛错逼运维介入），避免 llama-server 挂了静默烧钱。
+_FALLBACK_FAILURE_COUNT = 0
+_FALLBACK_TRIP_THRESHOLD = 3
+
+
 async def local_chat(messages: list[dict], temperature: float = 0.0) -> str:
     """本地 llama.cpp — 轻量分类。
 
     llama-server 需提前手动启动（与 Redis 同理，应用不负责进程管理）。
-    连不上时若 LLM_FALLBACK_TO_CLOUD=1 则自动降级到 DeepSeek。
+    连不上时若 LLM_FALLBACK_TO_CLOUD=1 则自动降级到 DeepSeek，但连续降级超阈值
+    会熔断（抛错），避免 llama-server 长时间挂掉时降级路径静默烧光云端预算。
     """
+    global _FALLBACK_FAILURE_COUNT
     try:
         response = await _client.chat.completions.create(
             model=await _get_model_name(),
             messages=messages,
             temperature=temperature,
         )
+        _FALLBACK_FAILURE_COUNT = 0  # 成功一次即清零
+        return response.choices[0].message.content
     except Exception:
         if not LLM_FALLBACK_TO_CLOUD:
             raise
-        logger.warning("llama-server 不可用，降级到 DeepSeek")
-        response = await _deepseek_client.chat.completions.create(
+        _FALLBACK_FAILURE_COUNT += 1
+        if _FALLBACK_FAILURE_COUNT > _FALLBACK_TRIP_THRESHOLD:
+            logger.error(
+                "llama-server 连续降级 %d 次，已熔断降级路径，请检查 llama-server 状态",
+                _FALLBACK_FAILURE_COUNT,
+            )
+            raise
+        logger.warning(
+            "llama-server 不可用（第 %d 次），降级到 DeepSeek",
+            _FALLBACK_FAILURE_COUNT,
+        )
+        response = await _get_deepseek_client().chat.completions.create(
             model=DEEPSEEK_MODEL,
             messages=messages,
             temperature=temperature,
         )
-    return response.choices[0].message.content
+        return response.choices[0].message.content
 
 
 async def cloud_chat(
@@ -144,7 +192,7 @@ async def cloud_chat(
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
-    stream = await _deepseek_client.chat.completions.create(**kwargs)
+    stream = await _get_deepseek_client().chat.completions.create(**kwargs)
 
     tool_buf: dict[int, dict] = {}
     usage: dict | None = None

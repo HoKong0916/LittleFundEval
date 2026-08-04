@@ -1,6 +1,6 @@
 """基金基本面 —— 收益/风险/当天三维度评估。
 
-四路数据：丹橘(收益/排名/基本信息) + fundgz(实时估算净值，不可用时回退 estimate_fund_nav) + akshare(波动率/夏普/回撤，近1年)。
+四路数据：蛋卷(收益/排名/基本信息) + fundgz(实时估算净值，不可用时回退 estimate_fund_nav) + akshare(波动率/夏普/回撤，近1年)。
 """
 
 import asyncio
@@ -8,13 +8,7 @@ import json
 import re
 from datetime import datetime
 
-import akshare as ak
 import httpx
-import pandas as pd
-
-# akshare 依赖 pandas 2.1+ 的 DataFrame.map，低版本做兼容
-if not hasattr(pd.DataFrame, "map"):
-    pd.DataFrame.map = lambda self, func, **_: self.applymap(func)
 
 
 async def get_fund_performance(fund_code: str) -> str:
@@ -30,7 +24,7 @@ async def get_fund_performance(fund_code: str) -> str:
         a_task = asyncio.to_thread(_fetch_risk, result, fund_code)
 
         gathered = await asyncio.gather(d_task, g_task, a_task, return_exceptions=True)
-        for name, r in zip(("丹橘", "fundgz", "akshare"), gathered):
+        for name, r in zip(("蛋卷", "fundgz", "akshare"), gathered):
             if isinstance(r, Exception):
                 errors.append(f"{name}: {r}")
 
@@ -68,7 +62,7 @@ async def get_fund_performance(fund_code: str) -> str:
 
 
 async def _fetch_danjuan(result: dict, fund_code: str, client: httpx.AsyncClient) -> None:
-    """从丹橘API提取收益、排名、规模、基本信息。"""
+    """从蛋卷API提取收益、排名、规模、基本信息。"""
     r = await client.get(f"https://danjuanfunds.com/djapi/fund/{fund_code}", timeout=30)
     r.raise_for_status()
     data = r.json()
@@ -155,6 +149,12 @@ def _level(v: float) -> str:
 
 def _fetch_risk(result: dict, fund_code: str) -> None:
     """通过 akshare 获取近1年的风险指标。"""
+    # 惰性导入：akshare/pandas 较重，仅在真正需要风险指标时加载，避免拖慢冷启动与单元测试
+    import pandas as pd
+    import akshare as ak
+    # akshare 依赖 pandas 2.1+ 的 DataFrame.map，低版本做兼容
+    if not hasattr(pd.DataFrame, "map"):
+        pd.DataFrame.map = lambda self, func, **_: self.applymap(func)
     try:
         df = ak.fund_individual_analysis_xq(symbol=fund_code)
     except Exception:

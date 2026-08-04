@@ -16,6 +16,8 @@ from tools import tools_prompt_json
 
 
 MAX_STEPS = 5
+HISTORY_WINDOW = 4          # history 只传最近 2 轮（4 条消息），防 ReAct 多步滚雪球烧 token
+OBSERVATION_MAX_LEN = 1500  # observation 截断长度，超长工具返回（如持仓明细）不整段塞回 LLM
 
 _ACTION_RE = re.compile(r"Action:\s*(\w+)\((.*)\)")
 _PARAM_RE = re.compile(r'(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"')
@@ -99,7 +101,9 @@ async def run_react_loop(
         {"role": "user", "content": user_question},
     ]
     if has_context:
-        messages.extend(history)
+        # 只传最近 2 轮：ReAct 每步会 append buffer + observation，全量 history 会让
+        # messages 在 5 步内滚到 10k+ token，单次 ReAct 烧的 token 是 DirectAnswer 的数倍。
+        messages.extend(history[-HISTORY_WINDOW:])
 
     final_answer = ""
     for step in range(1, MAX_STEPS + 1):
@@ -206,8 +210,13 @@ async def run_react_loop(
                         input={"tool_name": tool_name},
                         output=observation, latency_ms=tool_latency)
 
+        # observation 截断：持仓明细等工具可能返回上千 token，整段塞回 messages 会让
+        # 后续每步的 prompt 滚雪球。截断后 LLM 仍能基于摘要继续推理。
+        obs_for_llm = observation if len(observation) <= OBSERVATION_MAX_LEN else (
+            observation[:OBSERVATION_MAX_LEN] + "\n...（数据过长已截断，完整结果见 trace）"
+        )
         messages.append({"role": "assistant", "content": buffer})
-        messages.append({"role": "user", "content": f"Observation: {observation}"})
+        messages.append({"role": "user", "content": f"Observation: {obs_for_llm}"})
 
     else:
         # 步数耗尽但未产出 Final Answer → 强制要求模型基于已有 Observation 总结

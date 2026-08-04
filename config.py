@@ -18,7 +18,7 @@ LLAMA_CPP_BASE_URL = os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:9856/v1")
 # ── DeepSeek（评估 + 查询）─────────────────────────────────────
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 # ── 对话记忆 ────────────────────────────────────────────────
 import tiktoken
@@ -27,7 +27,10 @@ import tiktoken
 _TOKEN_ENC = tiktoken.get_encoding("o200k_base")
 
 # 单会话 token 超此阈值触发摘要化
-MAX_TOKEN_THRESHOLD = 10000
+# 设为 6000：ReAct/REWOO 单次调用本身会塞 system prompt + history + 工具结果，
+# history 留 10k 会把单次 prompt 推到 12k+，单次调用就烧掉日预算的 2%。
+# 降到 6k 后，history + prompt ≈ 8k，单次 ReAct 5 步总消耗约 30-40k，预算可控。
+MAX_TOKEN_THRESHOLD = 6000
 
 
 def count_tokens(text: str) -> int:
@@ -40,14 +43,8 @@ REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 
-# ── API Token 管理 ──────────────────────────────────────────
-# SQLite 数据库路径，存储 api_tokens 表（token / user_id / tier / 过期 / 吊销）
-# 首次启动时自动建表 + 种子 admin token
-TOKEN_DB_PATH = os.getenv("TOKEN_DB_PATH", "./data/tokens.db")
-
-# ── API 限流（滑动窗口日志算法）────────────────────────────
-# visitor: 每分钟 RATE_LIMIT_MAX_REQUESTS 次
-# admin: 不限流（core/rate_limit.py 中 tier == "admin" 直接放行）
+# ── 飞书限流（滑动窗口日志算法）────────────────────────────
+# 每个飞书用户每分钟 RATE_LIMIT_MAX_REQUESTS 次
 # Redis 不可用时降级放行，不阻塞业务
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "5"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))

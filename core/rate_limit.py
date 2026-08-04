@@ -1,6 +1,6 @@
 """滑动窗口限流器 —— Redis Sorted Set 实现。
 
-API 通道按 token（admin 不限流），飞书通道按 open_id。
+飞书通道按 open_id 限流（API 调试端点不限流）。
 """
 
 import asyncio
@@ -16,7 +16,6 @@ from config import (
     REDIS_PASSWORD,
     REDIS_PORT,
 )
-from core.auth import TokenInfo
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +59,6 @@ class RateLimiter:
         return self._redis != None
 
     # ── 限流检查 ──────────────────────────────────────────────
-
-    async def check(self, token_info: TokenInfo) -> tuple[bool, int]:
-        """API 通道：admin 放行，visitor 按 token 限流。"""
-        if token_info.tier == "admin":
-            return True, 0
-        return await self._sliding_window_check(f"lg:ratelimit:token:{token_info.token}")
 
     async def check_by_user_id(self, user_id: str) -> tuple[bool, int]:
         """飞书通道：按 open_id 限流，key 为 lg:ratelimit:user:{open_id}。"""
