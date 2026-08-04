@@ -39,15 +39,24 @@ async def run_direct_answer(
     t0 = time.perf_counter()
     buffer = ""
     llm_usage = None
+    budget_exceeded = False
     async for chunk in cloud_chat(messages, session_id=session_id):
         if chunk["type"] == "text":
             buffer += chunk["content"]
         elif chunk["type"] == "done":
             llm_usage = chunk.get("usage")
+            if chunk.get("finish_reason") == "budget_exceeded":
+                budget_exceeded = True
 
     latency = (time.perf_counter() - t0) * 1000
 
-    await trace.log(session_id, step=0, event="react.final_answer",
+    # 预算耗尽：buffer 已含 cloud_chat 给出的提示文本，直接作为最终回复
+    if budget_exceeded:
+        await trace.log(session_id, step=0, event="direct_answer.budget_exceeded",
+                        output=buffer[:500])
+        return buffer
+
+    await trace.log(session_id, step=0, event="direct_answer.final",
                     output=buffer[:500], latency_ms=latency, tokens=llm_usage)
 
     return buffer

@@ -155,6 +155,7 @@ async def _synthesize(
     t0 = time.perf_counter()
     buffer = ""
     llm_usage = None
+    budget_exceeded = False
     gen = cloud_chat(messages, session_id=session_id)
     try:
         async for chunk in gen:
@@ -162,11 +163,19 @@ async def _synthesize(
                 buffer += chunk["content"]
             elif chunk["type"] == "done":
                 llm_usage = chunk.get("usage")
+                if chunk.get("finish_reason") == "budget_exceeded":
+                    budget_exceeded = True
                 break
     finally:
         await gen.aclose()
 
     latency = (time.perf_counter() - t0) * 1000
+
+    # 预算耗尽：buffer 已含 cloud_chat 给出的提示文本，直接作为最终回复
+    if budget_exceeded:
+        await trace.log(session_id, step=0, event="rewoo.budget_exceeded",
+                        output=buffer[:500])
+        return buffer
 
     await trace.log(session_id, step=0, event="rewoo.phase3.done",
                     latency_ms=latency, tokens=llm_usage,

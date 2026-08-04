@@ -154,10 +154,12 @@ async def local_chat(messages: list[dict], temperature: float = 0.0) -> str:
             "llama-server 不可用（第 %d 次），降级到 DeepSeek",
             _FALLBACK_FAILURE_COUNT,
         )
+        # 降级调用加 timeout，避免 DeepSeek 卡住导致路由分类/摘要/REWOO提取挂死
         response = await _get_deepseek_client().chat.completions.create(
             model=DEEPSEEK_MODEL,
             messages=messages,
             temperature=temperature,
+            timeout=30,
         )
         return response.choices[0].message.content
 
@@ -192,11 +194,13 @@ async def cloud_chat(
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
-    stream = await _get_deepseek_client().chat.completions.create(**kwargs)
-
+    stream = None
     tool_buf: dict[int, dict] = {}
     usage: dict | None = None
     try:
+        # create() 本身可能抛异常（网络断/认证失败/503），放在 try 内赋值，
+        # 否则 finally 里 stream 未定义，aclose() 会抛 NameError 掩盖原始异常
+        stream = await _get_deepseek_client().chat.completions.create(**kwargs)
         async for chunk in stream:
             delta = chunk.choices[0].delta
 
@@ -254,4 +258,6 @@ async def cloud_chat(
         yield {"type": "done", "finish_reason": "error"}
         raise
     finally:
-        await stream.response.aclose()
+        # stream 可能因 create() 抛异常而未赋值，需判空
+        if stream is not None:
+            await stream.response.aclose()

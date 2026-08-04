@@ -57,6 +57,10 @@ async def summarize_session(memory: MemoryManager, session_id: str) -> None:
             current_layer = m.get("_layer", 0)
             if current_layer >= target_layer:
                 continue
+            # 上次本层压缩失败，跳过避免无限重试（否则 _layer 永远停在当前值，
+            # 每次会话触发摘要都从原文重试这条，且每次都可能失败）
+            if m.get("_layer_failed") == target_layer:
+                continue
 
             source = m.get("_original", m["content"])
 
@@ -65,8 +69,11 @@ async def summarize_session(memory: MemoryManager, session_id: str) -> None:
                 if "_original" not in m:
                     m["_original"] = source
                 m["_layer"] = target_layer
+                m.pop("_layer_failed", None)  # 成功后清除失败标记
                 changed = True
             except Exception:
+                m["_layer_failed"] = target_layer  # 标记本层已失败，下次跳过
+                changed = True
                 continue
 
             total = sum(count_tokens(m["content"]) for m in messages)
